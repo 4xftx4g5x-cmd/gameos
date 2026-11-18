@@ -1,0 +1,35 @@
+name: Build GameOS ISO
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Liberar espaço em disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Gerar a ISO (container Arch Linux)
+        run: |
+          mkdir -p out
+          docker run --rm --privileged \
+            -v "$PWD":/work \
+            -e OUT=/work/out \
+            archlinux:latest \
+            bash -c "pacman -Syu --noconfirm archiso && bash /work/build.sh"
+
+      - name: Enviar a ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: gameos-iso
+          path: out/*.iso
+          if-no-files-found: error
+          retention-days: 14
