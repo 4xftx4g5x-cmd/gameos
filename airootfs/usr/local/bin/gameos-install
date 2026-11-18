@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# GameOS - instalador: usa o archinstall e depois aplica o GameOS no sistema instalado.
+set -euo pipefail
+[[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
+
+cat <<'EOF'
+
+GameOS - instalador
+
+ Passo 1: o archinstall vai abrir para você escolher disco, idioma, usuário e senha.
+   - Perfil: escolha "Minimal" (os pacotes do GameOS entram no passo 2).
+   - Kernel: deixe "linux" (os drivers NVIDIA prontos são para ele).
+   - Repositórios adicionais: ative "multilib" (necessário para Steam).
+   - Rede: "NetworkManager".
+   - Quando terminar, NÃO reinicie e NÃO entre no chroot.
+
+ Passo 2: este script instala os pacotes de jogos e os ajustes do GameOS.
+
+EOF
+read -rp "Continuar? [s/N] " resp
+[[ "$resp" =~ ^[sSyY]$ ]] || exit 0
+
+archinstall
+
+if [[ ! -d /mnt/etc ]]; then
+  echo "Não encontrei o sistema instalado em /mnt. O archinstall foi concluído?" >&2
+  exit 1
+fi
+
+echo "==> Ativando multilib"
+if ! grep -q '^\[multilib\]' /mnt/etc/pacman.conf; then
+  sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /mnt/etc/pacman.conf
+fi
+
+echo "==> Instalando pacotes do GameOS (pode demorar)"
+mapfile -t PKGS < <(grep -vE '^\s*(#|$)' /usr/share/gameos/packages.txt | grep -vx 'archinstall')
+arch-chroot /mnt pacman -Syu --needed --noconfirm "${PKGS[@]}"
+
+echo "==> Copiando ajustes de desempenho"
+for f in \
+  etc/sysctl.d/99-gameos.conf \
+  etc/udev/rules.d/60-ioschedulers.rules \
+  etc/systemd/zram-generator.conf.d/gameos.conf \
+  etc/security/limits.d/10-gameos.conf \
+  etc/modprobe.d/gameos.conf \
+  usr/lib/systemd/system/gameos-firstboot.service; do
+  install -D -m 0644 "/$f" "/mnt/$f"
+done
+install -D -m 0755 /usr/local/bin/gameos-firstboot /mnt/usr/local/bin/gameos-firstboot
+
+echo "==> Ativando serviços"
+arch-chroot /mnt systemctl enable \
+  NetworkManager.service bluetooth.service sddm.service \
+  power-profiles-daemon.service fstrim.timer gameos-firstboot.service
+
+echo "==> Regenerando initramfs"
+arch-chroot /mnt mkinitcpio -P
+
+cat <<'EOF'
+
+Instalação concluída. Remova o pendrive e reinicie.
+No primeiro boot (com internet), o GameOS instala Heroic (Epic/GOG) e ProtonUp-Qt (Proton-GE).
+Para o Battle.net: abra o Lutris e procure "Battle.net".
+
+EOF

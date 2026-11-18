@@ -1,0 +1,8 @@
+NAME="GameOS"
+PRETTY_NAME="GameOS (base Arch Linux)"
+ID=arch
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;23;147;209"
+HOME_URL="https://archlinux.org/"
+LOGO=archlinux-logo

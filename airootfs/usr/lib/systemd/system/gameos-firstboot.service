@@ -1,0 +1,15 @@
+[Unit]
+Description=GameOS - configuração do primeiro boot
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/gameos/firstboot.done
+ConditionPathExists=!/run/archiso
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/gameos-firstboot
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
