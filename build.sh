@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GameOS - monta o perfil archiso (baseado no releng) e gera a ISO.
+# HKOS - monta o perfil archiso (baseado no releng) e gera a ISO.
 # Precisa rodar como root dentro de um Arch Linux (ou de um container archlinux).
 # Quase todas as configurações são escritas aqui mesmo (função put), então
 # atualizar o projeto = trocar só este arquivo e o packages.extra.
@@ -16,7 +16,7 @@ AIROOT="$PROFILE/airootfs"
 [[ "${DRYRUN:-0}" == 1 ]] || command -v mkarchiso >/dev/null || pacman -Sy --noconfirm archiso
 
 # put <modo> <caminho-no-airootfs>  (conteúdo vem do stdin)
-put() { mkdir -p "$(dirname "$AIROOT/$2")"; cat > "$AIROOT/$2"; chmod "$1" "$AIROOT/$2"; }
+put() { mkdir -p "$(dirname "$AIROOT/$2")"; rm -f "$AIROOT/$2"; cat > "$AIROOT/$2"; chmod "$1" "$AIROOT/$2"; }
 
 rm -rf "$WORK"
 mkdir -p "$PROFILE" "$OUT"
@@ -24,7 +24,7 @@ cp -r "$RELENG"/. "$PROFILE/"
 cp -rT "$HERE/airootfs" "$AIROOT"
 
 ###############################################################################
-# 1) PACOTES: tira o que não serve (debloat) e põe os do GameOS
+# 1) PACOTES: tira o que não serve (debloat) e põe os do HKOS
 ###############################################################################
 PKGLIST="$PROFILE/packages.x86_64"
 REMOVE=(
@@ -36,6 +36,7 @@ REMOVE=(
   modemmanager usb_modeswitch nfs-utils nbd open-iscsi udftools usbmuxd
   hyperv qemu-guest-agent virtualbox-guest-utils-nox open-vm-tools
   reiserfsprogs jfsutils nilfs-utils cloud-init ndisc6
+  man-db man-pages vim                                 # documentação e editor pesado
 )
 for p in "${REMOVE[@]}"; do sed -i "/^${p}\$/d" "$PKGLIST"; done
 grep -vE '^\s*(#|$)' "$HERE/packages.extra" >> "$PKGLIST"
@@ -45,13 +46,16 @@ cat >> "$PROFILE/pacman.conf" <<'EOF'
 [multilib]
 Include = /etc/pacman.d/mirrorlist
 EOF
+# Downloads paralelos (build e instalação mais rápidos)
+sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 10/' "$PROFILE/pacman.conf"
+grep -q '^ParallelDownloads' "$PROFILE/pacman.conf" || sed -i '/^\[options\]/a ParallelDownloads = 10' "$PROFILE/pacman.conf"
 
 ###############################################################################
 # 2) KERNEL ZEN: preset do initramfs e entradas de boot
 ###############################################################################
 rm -f "$AIROOT/etc/mkinitcpio.d/linux.preset"
 put 644 etc/mkinitcpio.d/linux-zen.preset <<'EOF'
-# mkinitcpio preset do GameOS (kernel linux-zen)
+# mkinitcpio preset do HKOS (kernel linux-zen)
 PRESETS=('archiso')
 
 ALL_kver='/boot/vmlinuz-linux-zen'
@@ -67,26 +71,51 @@ for d in grub syslinux efiboot; do
     -e 's|vmlinuz-linux|vmlinuz-linux-zen|g' \
     -e 's|initramfs-linux\.img|initramfs-linux-zen.img|g' \
     -e "s|archisosearchuuid=%ARCHISO_UUID%|& ${LIVE_CMD}|g" \
-    -e 's|Arch Linux|GameOS|g' {} +
+    -e 's|Arch Linux|HKOS|g' {} +
 done
 
 ###############################################################################
 # 3) IDENTIDADE E PERMISSÕES
 ###############################################################################
 sed -i \
-  -e 's|^iso_name=.*|iso_name="gameos"|' \
-  -e 's|^iso_label=.*|iso_label="GAMEOS_$(date +%Y%m)"|' \
-  -e 's|^iso_application=.*|iso_application="GameOS Live/Install ISO"|' \
-  -e '/^file_permissions=(/a\  ["/usr/local/bin/gameos-install"]="0:0:755"' \
+  -e 's|^iso_name=.*|iso_name="hkos"|' \
+  -e 's|^iso_label=.*|iso_label="HKOS_$(date +%Y%m)"|' \
+  -e 's|^iso_application=.*|iso_application="HKOS Live/Install ISO"|' \
+  -e "s|^airootfs_image_tool_options=.*|airootfs_image_tool_options=('-comp' 'zstd' '-Xcompression-level' '15' '-b' '1M')|" \
+  -e '/^file_permissions=(/a\  ["/usr/local/bin/hkos-install"]="0:0:755"' \
   -e '/^file_permissions=(/a\  ["/usr/local/bin/gameos-firstboot"]="0:0:755"' \
   -e '/^file_permissions=(/a\  ["/etc/sudoers.d/10-gameos"]="0:0:440"' \
   "$PROFILE/profiledef.sh"
 
 # Usuário da sessão live (sem senha, entra direto no desktop)
-grep -q '^gamer:' "$AIROOT/etc/passwd"  || echo 'gamer:x:1000:1000:GameOS Live:/home/gamer:/bin/bash' >> "$AIROOT/etc/passwd"
+grep -q '^gamer:' "$AIROOT/etc/passwd"  || echo 'gamer:x:1000:1000:HKOS Live:/home/gamer:/bin/bash' >> "$AIROOT/etc/passwd"
 grep -q '^gamer:' "$AIROOT/etc/shadow"  || echo 'gamer::14871::::::' >> "$AIROOT/etc/shadow"
 grep -q '^gamer:' "$AIROOT/etc/group"   || echo 'gamer:x:1000:' >> "$AIROOT/etc/group"
 grep -q '^gamer:' "$AIROOT/etc/gshadow" || echo 'gamer:!::' >> "$AIROOT/etc/gshadow"
+
+# Nome, identidade e mensagem de boas-vindas do HKOS
+rm -f "$AIROOT/usr/local/bin/gameos-install"
+put 644 etc/hostname <<'EOF'
+hkos
+EOF
+put 644 etc/os-release <<'EOF'
+NAME="HKOS"
+PRETTY_NAME="HKOS (HK Tech, base Arch Linux)"
+ID=arch
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;230;230;230"
+HOME_URL="https://archlinux.org/"
+LOGO=archlinux-logo
+EOF
+put 644 etc/motd <<'EOF'
+
+  HKOS - HK Tech | sistema Linux otimizado para jogos (base Arch Linux)
+
+  Instalar no disco:   sudo hkos-install
+  Steam, Lutris (Battle.net), Discord e Firefox já estão no menu.
+
+EOF
 
 # A pasta do usuário live é criada no boot (só no live; não vai para o instalado)
 put 644 etc/tmpfiles.d/gameos-live.conf <<'EOF'
@@ -112,8 +141,15 @@ ln -sf /usr/lib/systemd/system/sddm.service "$AIROOT/etc/systemd/system/display-
 # 5) SEM ANIMAÇÕES, SEM EFEITOS, SEM INDEXAÇÃO (KDE + GTK + Firefox)
 ###############################################################################
 put 644 etc/xdg/kdeglobals <<'EOF'
+[General]
+ColorScheme=BreezeDark
+
+[Icons]
+Theme=breeze-dark
+
 [KDE]
 AnimationDurationFactor=0
+LookAndFeelPackage=org.kde.breezedark.desktop
 EOF
 put 644 etc/xdg/kwinrc <<'EOF'
 [Plugins]
@@ -159,6 +195,7 @@ for v in 3 4; do
   put 644 "etc/gtk-$v.0/settings.ini" <<'EOF'
 [Settings]
 gtk-enable-animations=false
+gtk-application-prefer-dark-theme=true
 EOF
 done
 put 644 etc/firefox/policies/policies.json <<'EOF'
@@ -182,6 +219,57 @@ put 644 etc/firefox/policies/policies.json <<'EOF'
     }
   }
 }
+EOF
+
+# Papel de parede HK Tech (wallpaper.png na raiz do repositório) e tela de login
+WALL_DIR=usr/share/wallpapers/HKOS
+if [[ -f "$HERE/wallpaper.png" ]]; then
+  mkdir -p "$AIROOT/$WALL_DIR/contents/images"
+  cp "$HERE/wallpaper.png" "$AIROOT/$WALL_DIR/contents/images/1400x1008.png"
+  put 644 "$WALL_DIR/metadata.json" <<'EOF'
+{
+  "KPlugin": {
+    "Id": "HKOS",
+    "Name": "HKOS",
+    "Authors": [{ "Name": "HK Tech" }]
+  }
+}
+EOF
+  put 755 usr/local/bin/hkos-wallpaper <<'EOF'
+#!/usr/bin/env bash
+# Aplica o papel de parede HKOS uma única vez por usuário (depois ele escolhe o que quiser).
+FLAG="$HOME/.config/hkos-wallpaper.done"
+[[ -e "$FLAG" ]] && exit 0
+IMG=/usr/share/wallpapers/HKOS/contents/images/1400x1008.png
+for _ in $(seq 1 15); do
+  if plasma-apply-wallpaperimage "$IMG" >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$FLAG")"; touch "$FLAG"; exit 0
+  fi
+  sleep 2
+done
+EOF
+  sed -i '/^file_permissions=(/a\  ["/usr/local/bin/hkos-wallpaper"]="0:0:755"' "$PROFILE/profiledef.sh"
+  put 644 etc/xdg/autostart/hkos-wallpaper.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=HKOS wallpaper
+Exec=/usr/local/bin/hkos-wallpaper
+X-KDE-autostart-phase=2
+NoDisplay=true
+EOF
+  put 644 usr/share/sddm/themes/breeze/theme.conf.user <<'EOF'
+[General]
+type=image
+background=/usr/share/wallpapers/HKOS/contents/images/1400x1008.png
+EOF
+  HAS_WALL=1
+else
+  echo "AVISO: wallpaper.png não encontrado; o HKOS ficará sem o papel de parede HK Tech." >&2
+  HAS_WALL=0
+fi
+put 644 etc/sddm.conf.d/theme.conf <<'EOF'
+[Theme]
+Current=breeze
 EOF
 
 ###############################################################################
@@ -226,7 +314,7 @@ __GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1
 MESA_SHADER_CACHE_MAX_SIZE=10G
 EOF
 put 644 etc/sysctl.d/99-gameos.conf <<'EOF'
-# GameOS - memória, agendador e rede para jogos
+# HKOS - memória, agendador e rede para jogos
 vm.swappiness = 100
 vm.page-cluster = 0
 vm.vfs_cache_pressure = 50
@@ -277,32 +365,41 @@ SHIPPED=(
   etc/gtk-3.0/settings.ini etc/gtk-4.0/settings.ini
   etc/firefox/policies/policies.json
   usr/lib/systemd/system/gameos-firstboot.service
+  etc/os-release etc/motd etc/sddm.conf.d/theme.conf
 )
+if [[ "$HAS_WALL" == 1 ]]; then
+  SHIPPED+=(
+    usr/share/wallpapers/HKOS/metadata.json
+    usr/share/wallpapers/HKOS/contents/images/1400x1008.png
+    usr/share/sddm/themes/breeze/theme.conf.user
+    etc/xdg/autostart/hkos-wallpaper.desktop
+  )
+fi
 mkdir -p "$AIROOT/usr/share/gameos"
 printf '%s\n' "${SHIPPED[@]}" > "$AIROOT/usr/share/gameos/files.txt"
 cp "$HERE/packages.extra" "$AIROOT/usr/share/gameos/packages.txt"
 
 ###############################################################################
-# 7) INSTALADOR (archinstall + camada GameOS)
+# 7) INSTALADOR (archinstall + camada HKOS)
 ###############################################################################
-put 755 usr/local/bin/gameos-install <<'INSTALLER_EOF'
+put 755 usr/local/bin/hkos-install <<'INSTALLER_EOF'
 #!/usr/bin/env bash
-# GameOS - instalador: usa o archinstall e depois aplica o GameOS no sistema instalado.
+# HKOS - instalador: usa o archinstall e depois aplica o HKOS no sistema instalado.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
 
 cat <<'EOF'
 
-GameOS - instalador
+HKOS - instalador
 
  Passo 1: o archinstall vai abrir para você escolher disco, idioma, usuário e senha.
-   - Perfil: escolha "Minimal" (os pacotes do GameOS entram no passo 2).
-   - Kernel: escolha "linux-zen" (é o kernel otimizado do GameOS).
+   - Perfil: escolha "Minimal" (os pacotes do HKOS entram no passo 2).
+   - Kernel: escolha "linux-zen" (é o kernel otimizado do HKOS).
    - Repositórios adicionais: ative "multilib" (necessário para Steam).
    - Rede: "NetworkManager".
    - Quando terminar, NÃO reinicie e NÃO entre no chroot.
 
- Passo 2: este script instala os pacotes de jogos e os ajustes do GameOS.
+ Passo 2: este script instala os pacotes de jogos e os ajustes do HKOS.
 
  ATENÇÃO: o archinstall pode apagar o disco escolhido. Não escolha o disco do Windows
  se quiser mantê-lo.
@@ -323,7 +420,7 @@ if ! grep -q '^\[multilib\]' /mnt/etc/pacman.conf; then
   sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /mnt/etc/pacman.conf
 fi
 
-echo "==> Instalando pacotes do GameOS (pode demorar)"
+echo "==> Instalando pacotes do HKOS (pode demorar)"
 mapfile -t PKGS < <(grep -vE '^\s*(#|$)' /usr/share/gameos/packages.txt | grep -vx 'archinstall')
 arch-chroot /mnt pacman -Syu --needed --noconfirm "${PKGS[@]}"
 
@@ -332,6 +429,8 @@ while read -r f; do
   [[ -n "$f" ]] && install -D -m 0644 "/$f" "/mnt/$f"
 done < /usr/share/gameos/files.txt
 install -D -m 0755 /usr/local/bin/gameos-firstboot /mnt/usr/local/bin/gameos-firstboot
+[[ -f /usr/local/bin/hkos-wallpaper ]] && install -D -m 0755 /usr/local/bin/hkos-wallpaper /mnt/usr/local/bin/hkos-wallpaper
+sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 10/' /mnt/etc/pacman.conf
 
 echo "==> Montagem de disco sem atime"
 sed -i 's/\brelatime\b/noatime/g' /mnt/etc/fstab
@@ -358,7 +457,7 @@ arch-chroot /mnt mkinitcpio -P
 cat <<'EOF'
 
 Instalação concluída. Remova o pendrive e reinicie.
-No primeiro boot (com internet), o GameOS instala Heroic (Epic/GOG) e ProtonUp-Qt (Proton-GE).
+No primeiro boot (com internet), o HKOS instala Heroic (Epic/GOG) e ProtonUp-Qt (Proton-GE).
 Para o Battle.net: abra o Lutris e procure "Battle.net".
 
 EOF

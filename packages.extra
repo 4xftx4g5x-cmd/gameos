@@ -56,6 +56,12 @@ ttf-dejavu
 # --- Drivers de vídeo (AMD, Intel, NVIDIA) ---
 mesa
 lib32-mesa
+vulkan-mesa-layers
+lib32-vulkan-mesa-layers
+libva-mesa-driver
+intel-media-driver
+libva-nvidia-driver
+sof-firmware
 vulkan-icd-loader
 lib32-vulkan-icd-loader
 vulkan-radeon
