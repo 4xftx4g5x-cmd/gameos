@@ -68,6 +68,7 @@ intel-media-driver
 libva-nvidia-driver
 nvidia-open-dkms
 nvidia-utils
+nvidia-settings
 lib32-nvidia-utils
 intel-ucode
 amd-ucode

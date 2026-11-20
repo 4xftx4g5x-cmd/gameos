@@ -66,7 +66,7 @@ archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'
 archiso_image="/boot/initramfs-linux-zen.img"
 EOF
 
-LIVE_CMD='mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1'
+LIVE_CMD='mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1'
 for d in grub syslinux efiboot; do
   [[ -d "$PROFILE/$d" ]] || continue
   find "$PROFILE/$d" -type f -exec sed -i \
@@ -95,7 +95,7 @@ sed -i \
   -e "/^file_permissions=(/a\\  [\"/$SK/.xinitrc\"]=\"0:0:755\"" \
   "$PROFILE/profiledef.sh"
 
-for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge; do
+for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-fan; do
   sed -i "/^file_permissions=(/a\\  [\"/usr/local/bin/$s\"]=\"0:0:755\"" "$PROFILE/profiledef.sh"
 done
 
@@ -173,6 +173,7 @@ enable() { mkdir -p "$AIROOT/etc/systemd/system/$2.wants"; ln -sf "/usr/lib/syst
 enable NetworkManager.service multi-user.target
 enable scx.service multi-user.target
 enable earlyoom.service multi-user.target
+enable nvidia-persistenced.service multi-user.target
 
 ###############################################################################
 # 5) DESKTOP ULTRALEVE: Openbox + tint2, escuro, sem compositor e sem animações
@@ -203,16 +204,86 @@ OB="$HOME/.config/openbox"
 if [ ! -f "$OB/rc.xml" ]; then
   mkdir -p "$OB"
   cp /etc/xdg/openbox/rc.xml "$OB/rc.xml"
-  sed -i -e 's|<name>Clearlooks</name>|<name>Onyx</name>|' \
+  sed -i -e 's|<name>Clearlooks</name>|<name>HKOS</name>|' \
          -e 's|<animateIconify>yes|<animateIconify>no|' "$OB/rc.xml"
 fi
 exec openbox-session
+EOF
+put 644 usr/share/themes/HKOS/openbox-3/themerc <<'EOF'
+# HKOS - tema Openbox: preto total, texto branco
+border.width: 1
+padding.width: 8
+padding.height: 4
+window.handle.width: 0
+window.client.padding.width: 0
+window.label.text.justify: left
+
+window.*.border.color: #3a3a3a
+window.active.border.color: #e6e6e6
+window.*.title.bg: flat solid
+window.*.title.bg.color: #000000
+window.*.title.separator.color: #000000
+window.*.label.bg: parentrelative
+window.active.label.text.color: #ffffff
+window.inactive.label.text.color: #8a8a8a
+window.*.label.text.font: shadow=n
+window.*.handle.bg: flat solid
+window.*.handle.bg.color: #000000
+window.*.grip.bg: flat solid
+window.*.grip.bg.color: #000000
+
+window.*.button.*.bg: flat solid
+window.*.button.*.bg.color: #000000
+window.active.button.*.image.color: #ffffff
+window.inactive.button.*.image.color: #8a8a8a
+window.*.button.hover.bg.color: #1c1c1c
+window.*.button.pressed.bg.color: #2a2a2a
+window.*.button.disabled.image.color: #444444
+
+menu.border.color: #3a3a3a
+menu.title.bg: flat solid
+menu.title.bg.color: #000000
+menu.title.text.color: #ffffff
+menu.title.text.justify: left
+menu.items.bg: flat solid
+menu.items.bg.color: #000000
+menu.items.text.color: #cccccc
+menu.items.disabled.text.color: #555555
+menu.items.active.bg: flat solid
+menu.items.active.bg.color: #e6e6e6
+menu.items.active.text.color: #000000
+menu.separator.color: #3a3a3a
+menu.separator.width: 1
+menu.separator.padding.width: 6
+menu.separator.padding.height: 3
+menu.*.text.font: shadow=n
+
+osd.border.color: #e6e6e6
+osd.border.width: 1
+osd.bg: flat solid
+osd.bg.color: #000000
+osd.label.bg: flat solid
+osd.label.bg.color: #000000
+osd.label.text.color: #ffffff
+osd.hilight.bg: flat solid
+osd.hilight.bg.color: #e6e6e6
+osd.unhilight.bg: flat solid
+osd.unhilight.bg.color: #2a2a2a
+EOF
+put 644 $SK/.config/gtk-3.0/gtk.css <<'EOF'
+/* HKOS - preto total */
+window, .background, headerbar, .titlebar, dialog, popover, menu, .view, treeview, entry, textview text {
+  background-color: #000000; color: #e6e6e6;
+}
+button { background-image: none; background-color: #0a0a0a; border-color: #333333; color: #e6e6e6; }
+button:hover { background-color: #1a1a1a; }
+selection, *:selected { background-color: #e6e6e6; color: #000000; }
 EOF
 put 644 $SK/.Xresources <<'EOF'
 Xft.dpi: 96
 xterm*faceName: DejaVu Sans Mono
 xterm*faceSize: 11
-xterm*background: #0d0d0d
+xterm*background: #000000
 xterm*foreground: #e6e6e6
 xterm*cursorColor: #e6e6e6
 xterm*scrollBar: false
@@ -229,6 +300,11 @@ fi
 tint2 &
 nm-applet &
 volumeicon &
+[ -f "$HOME/.config/hkos-fan-curve" ] && hkos-fan run &
+# NVIDIA: PowerMizer em "preferir máximo desempenho" (ignorado em outras placas)
+if command -v nvidia-settings >/dev/null 2>&1 && [ -e /dev/nvidiactl ]; then
+  nvidia-settings -a "[gpu:0]/GpuPowerMizerMode=1" >/dev/null 2>&1 &
+fi
 EOF
 put 644 $SK/.config/openbox/menu.xml <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -244,6 +320,7 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <separator/>
   <item label="Modo console (Steam em tela cheia)"><action name="Execute"><command>hkos-mode console</command></action></item>
   <item label="Ajustes HKOS"><action name="Execute"><command>xterm -e sudo hkos-tweaks</command></action></item>
+  <item label="Ventoinha da placa de vídeo"><action name="Execute"><command>xterm -e hkos-fan</command></action></item>
   <item label="Instalar Proton-GE"><action name="Execute"><command>xterm -e hkos-proton-ge</command></action></item>
   <item label="Informações do sistema"><action name="Execute"><command>xterm -e hkos-info</command></action></item>
   <separator/>
@@ -259,29 +336,29 @@ put 644 $SK/.config/tint2/tint2rc <<'EOF'
 # HKOS - barra estilo Windows (embaixo): atalhos | janelas | bandeja | relógio
 rounded = 0
 border_width = 0
-background_color = #0d0d0d 100
+background_color = #000000 100
 border_color = #000000 0
-background_color_hover = #0d0d0d 100
+background_color_hover = #000000 100
 border_color_hover = #000000 0
-background_color_pressed = #0d0d0d 100
+background_color_pressed = #000000 100
 border_color_pressed = #000000 0
 
 rounded = 3
 border_width = 0
-background_color = #262626 100
+background_color = #000000 100
 border_color = #000000 0
-background_color_hover = #343434 100
+background_color_hover = #141414 100
 border_color_hover = #000000 0
-background_color_pressed = #343434 100
+background_color_pressed = #141414 100
 border_color_pressed = #000000 0
 
 rounded = 3
 border_width = 1
-background_color = #3a3a3a 100
+background_color = #1c1c1c 100
 border_color = #e6e6e6 60
-background_color_hover = #484848 100
+background_color_hover = #262626 100
 border_color_hover = #e6e6e6 60
-background_color_pressed = #484848 100
+background_color_pressed = #262626 100
 border_color_pressed = #e6e6e6 60
 
 panel_items = LTSC
@@ -360,7 +437,9 @@ put 644 etc/firefox/policies/policies.json <<'EOF'
       "SkipOnboarding": true
     },
     "Preferences": {
-      "media.ffmpeg.vaapi.enabled": { "Value": true, "Status": "default" }
+      "media.ffmpeg.vaapi.enabled": { "Value": true, "Status": "default" },
+      "ui.systemUsesDarkTheme": { "Value": 1, "Status": "default" },
+      "layout.css.prefers-color-scheme.content-override": { "Value": 0, "Status": "default" }
     }
   }
 }
@@ -391,6 +470,35 @@ w /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor - - - - performance
 w /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference - - - - performance
 w /sys/class/scsi_host/host*/link_power_management_policy - - - - max_performance
 w /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise
+EOF
+put 644 etc/tmpfiles.d/gameos-power.conf <<'EOF'
+# HKOS - perfil MÁXIMO: nada de economia de energia
+w /sys/devices/system/cpu/intel_pstate/no_turbo - - - - 0
+w /sys/devices/system/cpu/intel_pstate/min_perf_pct - - - - 100
+w /sys/devices/system/cpu/cpufreq/boost - - - - 1
+w /sys/bus/pci/devices/*/power/control - - - - on
+w /sys/class/drm/card*/device/power_dpm_force_performance_level - - - - high
+EOF
+put 644 usr/share/gameos/power-max.conf <<'EOF'
+# HKOS - perfil MÁXIMO: nada de economia de energia
+w /sys/devices/system/cpu/intel_pstate/no_turbo - - - - 0
+w /sys/devices/system/cpu/intel_pstate/min_perf_pct - - - - 100
+w /sys/devices/system/cpu/cpufreq/boost - - - - 1
+w /sys/bus/pci/devices/*/power/control - - - - on
+w /sys/class/drm/card*/device/power_dpm_force_performance_level - - - - high
+EOF
+put 644 etc/modprobe.d/gameos-audio.conf <<'EOF'
+options snd_hda_intel power_save=0 power_save_controller=N
+options snd_ac97_codec power_save=0
+EOF
+put 644 etc/X11/xorg.conf.d/20-nvidia-coolbits.conf <<'EOF'
+# Libera o controle manual da ventoinha da NVIDIA (só casa com GPU NVIDIA)
+Section "OutputClass"
+    Identifier "hkos-nvidia-coolbits"
+    MatchDriver "nvidia-drm"
+    Driver "nvidia"
+    Option "Coolbits" "4"
+EndSection
 EOF
 put 644 etc/default/scx <<'EOF'
 # Agendador sched_ext (como CachyOS/Bazzite): LAVD, feito para jogos e baixa latência
@@ -461,6 +569,10 @@ SHIPPED=(
   etc/systemd/coredump.conf.d/gameos.conf
   etc/systemd/system.conf.d/gameos.conf
   etc/tmpfiles.d/gameos-cpu.conf
+  etc/tmpfiles.d/gameos-power.conf
+  usr/share/gameos/power-max.conf
+  etc/modprobe.d/gameos-audio.conf
+  usr/share/themes/HKOS/openbox-3/themerc
   etc/default/scx
   etc/NetworkManager/conf.d/20-hkos.conf
   etc/gamemode.ini
@@ -469,6 +581,7 @@ SHIPPED=(
   etc/firefox/policies/policies.json
   etc/vconsole.conf
   etc/X11/xorg.conf.d/00-keyboard.conf
+  etc/X11/xorg.conf.d/20-nvidia-coolbits.conf
   etc/os-release etc/motd
 )
 [[ "$HAS_WALL" == 1 ]] && SHIPPED+=("$WALL")
@@ -537,15 +650,138 @@ echo; echo "Salvo em $OUT"
 read -rp "Enter para fechar..." _
 TOOL_EOF
 
+put 755 usr/local/bin/hkos-fan <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-fan [set N | auto | run | temp]  - ventoinha da placa de vídeo (NVIDIA e AMD)
+# Sem argumentos abre o menu. Mínimo de 30% por segurança.
+DRM="${HKOS_DRM:-/sys/class/drm}"
+SUDO=(); [[ $EUID -eq 0 ]] || SUDO=(sudo)
+FLAG="$HOME/.config/hkos-fan-curve"
+
+vendor() {
+  if grep -qs 0x10de "$DRM"/card*/device/vendor; then echo nvidia
+  elif grep -qs 0x1002 "$DRM"/card*/device/vendor; then echo amd
+  else echo none; fi
+}
+amd_dir() {
+  local d
+  for d in "$DRM"/card*/device/hwmon/hwmon*; do
+    [[ -e "$d/pwm1" ]] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+gpu_temp() {
+  local d
+  case "$(vendor)" in
+    nvidia) nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 ;;
+    amd)    d="$(amd_dir)" && echo $(( $(cat "$d/temp1_input") / 1000 )) ;;
+  esac
+}
+fan_set() { # 30..100
+  local p="$1" d
+  if ! [[ "$p" =~ ^[0-9]+$ ]] || (( p < 30 || p > 100 )); then echo "Use um valor de 30 a 100."; return 1; fi
+  case "$(vendor)" in
+    nvidia)
+      nvidia-settings -a "[gpu:0]/GPUFanControlState=1" -a "[fan:0]/GPUTargetFanSpeed=$p" >/dev/null 2>&1 \
+        || { echo "Falhou. Precisa de X11 e do Coolbits (reinicie o desktop depois de instalar)."; return 1; }
+      nvidia-settings -a "[fan:1]/GPUTargetFanSpeed=$p" >/dev/null 2>&1 || true ;;
+    amd)
+      d="$(amd_dir)" || { echo "Esta placa AMD não expõe controle manual (pwm1)."; return 1; }
+      echo 1 | "${SUDO[@]}" tee "$d/pwm1_enable" >/dev/null || return 1
+      echo $(( p * 255 / 100 )) | "${SUDO[@]}" tee "$d/pwm1" >/dev/null ;;
+    *) echo "Nenhuma GPU NVIDIA ou AMD encontrada."; return 1 ;;
+  esac
+}
+fan_auto() {
+  local d
+  case "$(vendor)" in
+    nvidia) nvidia-settings -a "[gpu:0]/GPUFanControlState=0" >/dev/null 2>&1 ;;
+    amd)    d="$(amd_dir)" && echo 2 | "${SUDO[@]}" tee "$d/pwm1_enable" >/dev/null ;;
+  esac
+}
+curve_loop() { # só NVIDIA; volta ao automático ao sair
+  trap 'fan_auto' EXIT
+  trap 'exit 0' INT TERM
+  local t s last=""
+  while true; do
+    t="$(gpu_temp)"
+    if [[ "$t" =~ ^[0-9]+$ ]]; then
+      if   (( t >= 80 )); then s=100
+      elif (( t >= 70 )); then s=85
+      elif (( t >= 60 )); then s=70
+      elif (( t >= 50 )); then s=55
+      elif (( t >= 40 )); then s=40
+      else s=30; fi
+      if [[ "$s" != "$last" ]]; then fan_set "$s" >/dev/null 2>&1 && last="$s"; fi
+    fi
+    sleep "${HKOS_FAN_INTERVAL:-3}"
+  done
+}
+menu() {
+  command -v dialog >/dev/null || { echo "dialog ausente"; exit 1; }
+  local C t
+  while true; do
+    t="$(gpu_temp)"
+    C="$(dialog --stdout --title "Ventoinha da GPU ($(vendor), ${t:-?}°C)" \
+      --menu "Velocidade fixa baixa pode superaquecer a placa. Fique de olho na temperatura." 22 72 11 \
+      100 "100% (máximo)" 80 "80%" 70 "70%" 60 "60%" 50 "50%" 40 "40%" 30 "30% (mínimo)" \
+      auto "Automático (padrão da placa)" \
+      curve "Curva automática ao ligar o PC (NVIDIA)" \
+      nocurve "Desligar a curva automática" \
+      sair "Sair")" || exit 0
+    case "$C" in
+      auto)    fan_auto && dialog --msgbox "Ventoinha no automático." 6 40 ;;
+      curve)   if [[ "$(vendor)" != nvidia ]]; then dialog --msgbox "A curva automática é só para NVIDIA. Use um valor fixo ou o automático." 7 56
+               else mkdir -p "$(dirname "$FLAG")"; touch "$FLAG"; (setsid "$0" run >/dev/null 2>&1 &)
+                    dialog --msgbox "Curva ligada agora e a cada login:\n40C=40% 50C=55% 60C=70% 70C=85% 80C+=100%" 8 56; fi ;;
+      nocurve) rm -f "$FLAG"; pkill -f 'hkos-fan run' 2>/dev/null; fan_auto; dialog --msgbox "Curva desligada." 6 40 ;;
+      sair)    exit 0 ;;
+      *)       if fan_set "$C"; then dialog --msgbox "Ventoinha em $C%." 6 40
+               else dialog --msgbox "Não consegui ajustar. Veja a mensagem no terminal." 6 56; fi ;;
+    esac
+  done
+}
+
+case "${1:-}" in
+  set)  fan_set "${2:-}" ;;
+  auto) fan_auto ;;
+  run)  curve_loop ;;
+  temp) gpu_temp ;;
+  *)    menu ;;
+esac
+TOOL_EOF
+
 put 755 usr/local/bin/hkos-tweaks <<'TOOL_EOF'
 #!/usr/bin/env bash
 # Painel de ajustes do HKOS (terminal). Precisa de root.
 [[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
 command -v dialog >/dev/null || { echo "dialog não instalado"; exit 1; }
 REAL_USER="${SUDO_USER:-root}"
+EXTREME='pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1'
+
+# cmdline_param on|off "param1 param2 ..." (systemd-boot e GRUB)
+cmdline_param() {
+  local mode="$1" params="$2" f p esc
+  for f in /boot/loader/entries/*.conf; do
+    [[ -f "$f" ]] || continue
+    for p in $params; do
+      esc="$(printf '%s' "$p" | sed 's|[].[*^$/]|\\&|g')"
+      sed -i "/^options/ s/ ${esc}\( \|\$\)/\1/g" "$f"
+      [[ $mode == on ]] && sed -i "/^options/ s/\$/ $p/" "$f"
+    done
+  done
+  if [[ -f /etc/default/grub ]]; then
+    for p in $params; do
+      esc="$(printf '%s' "$p" | sed 's|[].[*^$/]|\\&|g')"
+      sed -i "/^GRUB_CMDLINE_LINUX_DEFAULT/ s/ ${esc}\( \|\"\)/\1/g" /etc/default/grub
+      [[ $mode == on ]] && sed -i "/^GRUB_CMDLINE_LINUX_DEFAULT/ s/\"\$/ $p\"/" /etc/default/grub
+    done
+    grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true
+  fi
+}
 
 set_cpu() { # performance | balanced
-  local gov epp
+  local gov epp c
   if [[ $1 == performance ]]; then gov=performance; epp=performance
   else
     gov=powersave
@@ -554,10 +790,27 @@ set_cpu() { # performance | balanced
   fi
   for c in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
     echo "$gov" > "$c/scaling_governor" 2>/dev/null || true
-    [[ -w "$c/energy_performance_preference" ]] && echo "$epp" > "$c/energy_performance_preference" 2>/dev/null || true
+    [[ -w "$c/energy_performance_preference" ]] && echo "$epp" > "$c/energy_performance_preference" 2>/dev/null
   done
   sed -i -e "s|\(scaling_governor - - - - \).*|\1$gov|" \
          -e "s|\(energy_performance_preference - - - - \).*|\1$epp|" /etc/tmpfiles.d/gameos-cpu.conf
+}
+
+set_power() { # max | balanced
+  local p
+  if [[ $1 == max ]]; then
+    set_cpu performance
+    cp /usr/share/gameos/power-max.conf /etc/tmpfiles.d/gameos-power.conf
+    systemd-tmpfiles --create /etc/tmpfiles.d/gameos-power.conf 2>/dev/null || true
+    cmdline_param on "$EXTREME"
+  else
+    set_cpu balanced
+    rm -f /etc/tmpfiles.d/gameos-power.conf
+    for p in /sys/bus/pci/devices/*/power/control; do echo auto > "$p" 2>/dev/null || true; done
+    echo 0 > /sys/devices/system/cpu/intel_pstate/min_perf_pct 2>/dev/null || true
+    for p in /sys/class/drm/card*/device/power_dpm_force_performance_level; do echo auto > "$p" 2>/dev/null || true; done
+    cmdline_param off "$EXTREME"
+  fi
 }
 
 set_scx() { # scx_lavd | scx_bpfland | off
@@ -569,39 +822,25 @@ set_scx() { # scx_lavd | scx_bpfland | off
   fi
 }
 
-set_mitigations() { # on | off
-  local f
-  for f in /boot/loader/entries/*.conf; do
-    [[ -f "$f" ]] || continue
-    if [[ $1 == off ]]; then grep -q 'mitigations=off' "$f" || sed -i '/^options/ s/$/ mitigations=off/' "$f"
-    else sed -i '/^options/ s/ mitigations=off//' "$f"; fi
-  done
-  if [[ -f /etc/default/grub ]]; then
-    if [[ $1 == off ]]; then grep -q 'mitigations=off' /etc/default/grub || sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 mitigations=off"/' /etc/default/grub
-    else sed -i 's/ mitigations=off//' /etc/default/grub; fi
-    grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true
-  fi
-}
-
 while true; do
-  C=$(dialog --stdout --title "Ajustes HKOS" --menu "Escolha:" 20 68 9 \
-    1 "CPU: máximo desempenho (padrão)" \
-    2 "CPU: equilibrado (gasta menos energia)" \
+  C=$(dialog --stdout --title "Ajustes HKOS" --menu "Escolha:" 21 72 9 \
+    1 "Perfil MÁXIMO (CPU, GPU, PCIe e USB sempre no limite) - padrão" \
+    2 "Perfil equilibrado (gasta menos energia)" \
     3 "Agendador de jogos: LAVD (padrão)" \
     4 "Agendador de jogos: BPFLAND" \
     5 "Agendador de jogos: desligado" \
-    6 "Mitigações de CPU: desligar (mais FPS, menos proteção)" \
+    6 "Mitigações de CPU: desligar (mais FPS, menos proteção) - padrão" \
     7 "Mitigações de CPU: ligar (mais seguro)" \
     8 "Modo console (Steam em tela cheia no próximo login)" \
     9 "Sair") || exit 0
   case "$C" in
-    1) set_cpu performance ;;
-    2) set_cpu balanced ;;
+    1) set_power max;      dialog --msgbox "Perfil máximo ativado. Parte vale só após reiniciar." 6 58 ;;
+    2) set_power balanced; dialog --msgbox "Perfil equilibrado ativado. Parte vale só após reiniciar." 6 58 ;;
     3) set_scx scx_lavd ;;
     4) set_scx scx_bpfland ;;
     5) set_scx off ;;
-    6) set_mitigations off; dialog --msgbox "Desligadas. Vale a partir do próximo boot." 6 50 ;;
-    7) set_mitigations on;  dialog --msgbox "Ligadas. Vale a partir do próximo boot." 6 50 ;;
+    6) cmdline_param on mitigations=off;  dialog --msgbox "Desligadas. Vale a partir do próximo boot." 6 50 ;;
+    7) cmdline_param off mitigations=off; dialog --msgbox "Ligadas. Vale a partir do próximo boot." 6 50 ;;
     8) sudo -u "$REAL_USER" env DISPLAY="${DISPLAY:-:0}" HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)" /usr/local/bin/hkos-mode console; exit 0 ;;
     9) exit 0 ;;
   esac
@@ -673,7 +912,7 @@ echo "==> Aplicando ajustes do HKOS"
 while read -r f; do
   [[ -n "$f" ]] && install -D -m 0644 "/$f" "/mnt/$f"
 done < /usr/share/gameos/files.txt
-for s in hkos-mode hkos-proton-ge hkos-info hkos-tweaks; do
+for s in hkos-mode hkos-proton-ge hkos-info hkos-tweaks hkos-fan; do
   install -D -m 0755 "/usr/local/bin/$s" "/mnt/usr/local/bin/$s"
 done
 install -d /mnt/usr/share/hkos
@@ -683,7 +922,7 @@ genfstab -U /mnt >> /mnt/etc/fstab
 sed -i 's/\brelatime\b/noatime/g' /mnt/etc/fstab
 
 # --- 4) Configura dentro do sistema novo ---
-CMD='quiet loglevel=3 mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1'
+CMD='quiet loglevel=3 mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1'
 ROOT_UUID="$(blkid -s UUID -o value "$ROOT")"
 cat > /mnt/root/hkos-setup.sh <<'SETUP_EOF'
 #!/usr/bin/env bash
@@ -713,6 +952,7 @@ sed -i "s/HKOS_USER/$USERN/" /etc/systemd/system/getty@tty1.service.d/autologin.
 mkinitcpio -P
 systemctl enable NetworkManager.service fstrim.timer earlyoom.service systemd-timesyncd.service
 systemctl enable scx.service || true
+systemctl enable nvidia-persistenced.service || true
 systemctl enable systemd-boot-update.service || true
 systemctl disable NetworkManager-wait-online.service || true
 SETUP_EOF
