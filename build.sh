@@ -95,7 +95,7 @@ sed -i \
   -e "/^file_permissions=(/a\\  [\"/$SK/.xinitrc\"]=\"0:0:755\"" \
   "$PROFILE/profiledef.sh"
 
-for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-fan; do
+for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-fan hkos-ajuda hkos-loja; do
   sed -i "/^file_permissions=(/a\\  [\"/usr/local/bin/$s\"]=\"0:0:755\"" "$PROFILE/profiledef.sh"
 done
 
@@ -123,6 +123,7 @@ put 644 etc/motd <<'EOF'
 
   Instalar no disco:   sudo hkos-install   (ou botão direito na área de trabalho)
   Steam, Discord e Firefox estão na barra de baixo.
+  Comandos e ajuda:   hkos-ajuda      Instalar programas/drivers:   hkos-loja
 
 EOF
 ln -sf /usr/share/zoneinfo/America/Sao_Paulo "$AIROOT/etc/localtime"
@@ -289,6 +290,7 @@ xterm*cursorColor: #e6e6e6
 xterm*scrollBar: false
 xterm*saveLines: 5000
 xterm*selectToClipboard: true
+xterm*utf8: 1
 EOF
 put 755 $SK/.config/openbox/autostart <<'EOF'
 xsetroot -cursor_name left_ptr &
@@ -322,6 +324,8 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <item label="Ajustes HKOS"><action name="Execute"><command>xterm -e sudo hkos-tweaks</command></action></item>
   <item label="Ventoinha da placa de vídeo"><action name="Execute"><command>xterm -e hkos-fan</command></action></item>
   <item label="Instalar Proton-GE"><action name="Execute"><command>xterm -e hkos-proton-ge</command></action></item>
+  <item label="Loja (instalar programas e drivers)"><action name="Execute"><command>xterm -e hkos-loja</command></action></item>
+  <item label="Ajuda e comandos"><action name="Execute"><command>xterm -e hkos-ajuda</command></action></item>
   <item label="Informações do sistema"><action name="Execute"><command>xterm -e hkos-info</command></action></item>
   <separator/>
   <item label="Instalar HKOS no disco"><action name="Execute"><command>xterm -e sudo hkos-install</command></action></item>
@@ -583,6 +587,7 @@ SHIPPED=(
   etc/X11/xorg.conf.d/00-keyboard.conf
   etc/X11/xorg.conf.d/20-nvidia-coolbits.conf
   etc/os-release etc/motd
+  usr/share/hkos/ajuda.txt
 )
 [[ "$HAS_WALL" == 1 ]] && SHIPPED+=("$WALL")
 mkdir -p "$AIROOT/usr/share/gameos"
@@ -751,6 +756,202 @@ case "${1:-}" in
 esac
 TOOL_EOF
 
+put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
+================================================================
+  HKOS - AJUDA E COMANDOS         (setas/PageUp/PageDown, q sai)
+  Dica: dentro desta tela, digite /palavra para procurar.
+================================================================
+
+1) USO BASICO
+  Botao direito na area de trabalho ..... menu principal
+  Botao do meio na area de trabalho ..... lista de janelas
+  Alt+Tab ............................... trocar de janela
+  Alt+F4 ................................ fechar janela
+  Terminal: menu > Terminal (ou barra de baixo)
+
+2) FERRAMENTAS DO HKOS (no menu ou digitando o nome)
+  hkos-loja ............ instalar programas e drivers (menu pronto)
+  hkos-ajuda ........... esta tela
+  sudo hkos-tweaks ..... perfil de desempenho, agendador, mitigacoes
+  hkos-fan ............. ventoinha da placa de video
+  hkos-info ............ relatorio do sistema (salva ~/hkos-info.txt)
+  hkos-proton-ge ....... baixa o Proton-GE para o Steam
+  hkos-mode console .... Steam em tela cheia no proximo login
+  hkos-mode desktop .... volta ao modo desktop
+  sudo hkos-install .... instalar o HKOS no disco (APAGA o disco)
+
+3) INSTALAR, PESQUISAR E REMOVER PROGRAMAS (pacman)
+  sudo pacman -Syu .................. atualizar o sistema inteiro
+  pacman -Ss nome ................... pesquisar um programa
+  sudo pacman -S nome ............... instalar
+  sudo pacman -Rns nome ............. remover (com dependencias)
+  pacman -Qs nome ................... ver se esta instalado
+  pacman -Qi nome ................... detalhes de um pacote instalado
+  Exemplo: sudo pacman -S vlc obs-studio qbittorrent
+  AVISO: no modo live (pendrive) o que voce instala some ao reiniciar
+  e o espaco e pequeno. Programas grandes: instale o HKOS no disco.
+
+4) DRIVERS
+  NVIDIA (ja vem pronto; GTX 16xx / RTX 20xx ou mais nova):
+    sudo pacman -S nvidia-open-dkms nvidia-utils linux-zen-headers
+    nvidia-smi ......................... ver a placa e a temperatura
+  AMD / Intel (ja vem pronto): mesa e vulkan ja estao instalados.
+  Wi-Fi Broadcom:   sudo pacman -S broadcom-wl-dkms   (depois reinicie)
+  Bluetooth:        sudo pacman -S bluez bluez-utils blueman
+                    sudo systemctl enable --now bluetooth
+                    blueman-applet &      (icone na bandeja)
+  Firmware geral:   sudo pacman -S linux-firmware
+  Temperaturas:     sudo pacman -S lm_sensors   e depois:  sensors
+  Placa antiga (GTX 10xx ou mais velha): o driver open nao serve e o
+  driver legado esta so no AUR (veja o item 7).
+
+5) REDE
+  nmtui ............................. menu de rede (texto)
+  nmcli device wifi list ............ redes Wi-Fi ao alcance
+  nmcli device wifi connect NOME password SENHA
+  nmcli connection show ............. conexoes salvas
+  ping -c 3 archlinux.org ........... testar a internet
+  Icone de rede na barra de baixo tambem funciona.
+
+6) JOGOS
+  Steam: nas propriedades do jogo > Opcoes de inicializacao:
+    mangohud %command% ................ mostra FPS e temperatura
+    gamemoderun %command% ............. prioridade maxima (GameMode)
+    gamescope -f -- %command% ......... tela cheia pelo Gamescope
+    mangohud gamemoderun %command% .... os dois juntos
+  Proton-GE: menu > Instalar Proton-GE, reinicie o Steam e escolha em
+    Propriedades > Compatibilidade.
+  Battle.net: abra o Lutris e procure por "Battle.net".
+  Jogos com anti-cheat de kernel (Valorant etc.) nao rodam no Linux.
+
+7) PROGRAMAS DO AUR (nao vem instalado)
+  O AUR tem programas que nao estao nos repositorios oficiais.
+    sudo pacman -S --needed base-devel git
+    git clone https://aur.archlinux.org/yay-bin.git
+    cd yay-bin && makepkg -si
+  Depois:  yay -S nome-do-programa
+  Cuidado: pacotes do AUR sao de terceiros. Leia antes de instalar.
+
+8) SISTEMA
+  htop .............................. processos e uso de CPU/RAM
+  free -h ........................... memoria
+  lsblk ............................. discos e particoes
+  df -h ............................. espaco em disco
+  journalctl -b -p 3 ................ erros desde o boot
+  systemctl --failed ................ servicos com falha
+  systemctl reboot .................. reiniciar
+  systemctl poweroff ................ desligar
+
+9) SE ALGO DER ERRADO
+  Rode hkos-info e guarde o texto (~/hkos-info.txt) para pedir ajuda.
+HELP_EOF
+
+put 755 usr/local/bin/hkos-ajuda <<'TOOL_EOF'
+#!/usr/bin/env bash
+# Mostra o guia de comandos do HKOS.
+LESSCHARSET=utf-8 exec less -R /usr/share/hkos/ajuda.txt
+TOOL_EOF
+
+put 755 usr/local/bin/hkos-loja <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-loja - instala programas e drivers (pacman) com menus.
+LIVE=0; [[ -d /run/archiso ]] && LIVE=1
+SUDO=(); [[ $EUID -eq 0 ]] || SUDO=(sudo)
+
+pm() { # instala pacotes (live: -Sy; instalado: -Syu para não deixar o sistema pela metade)
+  if (( LIVE )); then "${SUDO[@]}" pacman -Sy --needed --noconfirm "$@"
+  else "${SUDO[@]}" pacman -Syu --needed --noconfirm "$@"; fi
+}
+pause() { read -rp "Enter para voltar..." _; }
+
+pkgs_for() { # nome-da-opção -> pacotes
+  case "$1" in
+    bluetooth)  echo "bluez bluez-utils blueman" ;;
+    wifi_bcm)   echo "broadcom-wl-dkms" ;;
+    sensors)    echo "lm_sensors" ;;
+    nvtop)      echo "nvtop" ;;
+    files)      echo "pcmanfm" ;;
+    mpv)        echo "mpv" ;;
+    vlc)        echo "vlc" ;;
+    obs)        echo "obs-studio" ;;
+    torrent)    echo "qbittorrent" ;;
+    fetch)      echo "fastfetch" ;;
+    archivers)  echo "p7zip unzip unrar" ;;
+  esac
+}
+
+valid_names() { [[ "$1" =~ ^[a-zA-Z0-9@._+\ -]+$ ]]; }
+
+install_list() {
+  local sel p list=() chosen
+  sel="$(dialog --stdout --separate-output --title "Programas e drivers" \
+    --checklist "Marque com Espaço e confirme com Enter:" 22 74 12 \
+    bluetooth "Bluetooth (bluez + blueman)" off \
+    wifi_bcm  "Wi-Fi Broadcom (broadcom-wl-dkms)" off \
+    sensors   "Sensores de temperatura (lm_sensors)" off \
+    nvtop     "Monitor da GPU (nvtop)" off \
+    files     "Gerenciador de arquivos (pcmanfm)" off \
+    mpv       "Player de vídeo leve (mpv)" off \
+    vlc       "VLC" off \
+    obs       "OBS Studio (gravar e transmitir)" off \
+    torrent   "qBittorrent" off \
+    fetch     "fastfetch (info do sistema)" off \
+    archivers "Zip, 7z e RAR (p7zip, unzip, unrar)" off)" || return 0
+  [[ -n "$sel" ]] || return 0
+  for chosen in $sel; do
+    for p in $(pkgs_for "$chosen"); do list+=("$p"); done
+  done
+  clear
+  echo "Instalando: ${list[*]}"
+  if pm "${list[@]}"; then
+    for chosen in $sel; do
+      [[ "$chosen" == bluetooth ]] && "${SUDO[@]}" systemctl enable --now bluetooth.service
+    done
+    echo; echo "Pronto."
+    [[ " $sel " == *" wifi_bcm "* ]] && echo "Reinicie para o driver de Wi-Fi funcionar."
+    [[ " $sel " == *" bluetooth "* ]] && echo "Bluetooth: abra um terminal e rode  blueman-applet &"
+  else
+    echo; echo "Falhou. Sem internet, pacote inexistente ou pouco espaço (modo live)."
+  fi
+  pause
+}
+
+main() {
+  command -v dialog >/dev/null || { echo "dialog ausente"; exit 1; }
+  local C N Q note=""
+  (( LIVE )) && note="Modo live: o que você instalar some ao reiniciar."
+  while true; do
+    C="$(dialog --stdout --title "HKOS Loja" --menu "$note" 17 66 7 \
+      1 "Programas e drivers (lista pronta)" \
+      2 "Instalar pelo nome" \
+      3 "Pesquisar" \
+      4 "Atualizar o sistema" \
+      5 "Remover programa" \
+      6 "Ajuda e comandos" \
+      7 "Sair")" || exit 0
+    case "$C" in
+      1) install_list ;;
+      2) N="$(dialog --stdout --inputbox "Nome do(s) pacote(s):" 8 62)" || continue
+         valid_names "$N" || { dialog --msgbox "Nome inválido." 6 30; continue; }
+         clear; pm $N || echo "Falhou."; pause ;;
+      3) Q="$(dialog --stdout --inputbox "Pesquisar por:" 8 62)" || continue
+         valid_names "$Q" || { dialog --msgbox "Texto inválido." 6 30; continue; }
+         clear; { pacman -Ss "$Q" || echo "Nada encontrado (sem internet ou lista desatualizada: rode 'sudo pacman -Sy')."; } | less -R ;;
+      4) clear
+         if (( LIVE )); then echo "Atualizar no modo live baixa muita coisa para a memória. Prefira instalar no disco."
+            read -rp "Continuar mesmo assim? [s/N] " r; [[ "$r" =~ ^[sS]$ ]] || continue; fi
+         "${SUDO[@]}" pacman -Syu; pause ;;
+      5) N="$(dialog --stdout --inputbox "Nome do pacote a remover:" 8 62)" || continue
+         valid_names "$N" || { dialog --msgbox "Nome inválido." 6 30; continue; }
+         clear; "${SUDO[@]}" pacman -Rns $N; pause ;;
+      6) hkos-ajuda ;;
+      7) exit 0 ;;
+    esac
+  done
+}
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"
+TOOL_EOF
+
 put 755 usr/local/bin/hkos-tweaks <<'TOOL_EOF'
 #!/usr/bin/env bash
 # Painel de ajustes do HKOS (terminal). Precisa de root.
@@ -912,7 +1113,7 @@ echo "==> Aplicando ajustes do HKOS"
 while read -r f; do
   [[ -n "$f" ]] && install -D -m 0644 "/$f" "/mnt/$f"
 done < /usr/share/gameos/files.txt
-for s in hkos-mode hkos-proton-ge hkos-info hkos-tweaks hkos-fan; do
+for s in hkos-mode hkos-proton-ge hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja; do
   install -D -m 0755 "/usr/local/bin/$s" "/mnt/usr/local/bin/$s"
 done
 install -d /mnt/usr/share/hkos
