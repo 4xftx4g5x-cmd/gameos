@@ -40,6 +40,11 @@ REMOVE=(
   reiserfsprogs jfsutils nilfs-utils cloud-init ndisc6 dmraid
   sg3_utils sdparm lsscsi bind dnsmasq iwd reflector
   man-db man-pages vim
+  archinstall refind grub                               # o HKOS tem instalador próprio (systemd-boot)
+  bcachefs-tools btrfs-progs f2fs-tools xfsprogs mdadm lvm2 mmc-utils bolt
+  tpm2-tools tpm2-tss sequoia-sq openpgp-card-tools pcsclite libfido2
+  lynx wireless_tools dhcpcd                           # (zsh fica: o root do releng usa zsh)
+  foot-terminfo ghostty-terminfo kitty-terminfo kmscon-terminfo rxvt-unicode-terminfo
 )
 for p in "${REMOVE[@]}"; do sed -i "/^${p}\$/d" "$PKGLIST"; done
 grep -vE '^\s*(#|$)' "$HERE/packages.extra" >> "$PKGLIST"
@@ -95,7 +100,7 @@ sed -i \
   -e "/^file_permissions=(/a\\  [\"/$SK/.xinitrc\"]=\"0:0:755\"" \
   "$PROFILE/profiledef.sh"
 
-for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-fan hkos-ajuda hkos-loja; do
+for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-fan hkos-ajuda hkos-loja; do
   sed -i "/^file_permissions=(/a\\  [\"/usr/local/bin/$s\"]=\"0:0:755\"" "$PROFILE/profiledef.sh"
 done
 
@@ -210,7 +215,7 @@ if [ ! -f "$OB/rc.xml" ]; then
          -e 's|<animateIconify>yes|<animateIconify>no|' \
          -e 's|<drawContents>yes|<drawContents>no|' \
          -e 's|<number>4</number>|<number>1</number>|' \
-         -e 's|<keyboard>|<keyboard><keybind key="W-e"><action name="Execute"><command>hkos-explorer</command></action></keybind>|' "$OB/rc.xml"
+         -e '/<keyboard>/r /usr/share/hkos/keybinds.xml' "$OB/rc.xml"
 fi
 exec openbox-session
 EOF
@@ -288,6 +293,163 @@ put 644 $SK/.config/mimeapps.list <<'EOF'
 [Default Applications]
 inode/directory=pcmanfm.desktop
 EOF
+put 644 usr/share/hkos/keybinds.xml <<'EOF'
+<!-- HKOS: atalhos parecidos com o Windows -->
+<keybind key="W-e"><action name="Execute"><command>hkos-explorer</command></action></keybind>
+<keybind key="W-r"><action name="Execute"><command>hkos-run</command></action></keybind>
+<keybind key="C-Escape"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
+<keybind key="W-Up"><action name="ToggleMaximize"/></keybind>
+<keybind key="W-Down"><action name="Iconify"/></keybind>
+<keybind key="W-Left"><action name="UnmaximizeFull"/><action name="MoveResizeTo"><x>0</x><y>0</y><width>50%</width><height>100%</height></action></keybind>
+<keybind key="W-Right"><action name="UnmaximizeFull"/><action name="MoveResizeTo"><x>50%</x><y>0</y><width>50%</width><height>100%</height></action></keybind>
+EOF
+put 755 usr/local/bin/hkos-battlenet <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-battlenet - instala (na 1ª vez) o Lutris + Wine e abre o Lutris para o Battle.net.
+# Fica fora do ISO para o sistema ser bem mais leve.
+SUDO=(); [[ $EUID -eq 0 ]] || SUDO=(sudo)
+install_bnet() {
+  echo "O Battle.net usa Lutris + Wine (cerca de 1,5 GB, precisa de internet)."
+  if [[ -d /run/archiso ]]; then
+    echo "Modo live (pendrive): usa muita memória e some ao reiniciar."
+    echo "Prefira instalar o HKOS no disco antes (sudo hkos-install)."
+  fi
+  read -rp "Instalar agora? [s/N] " r; [[ "$r" =~ ^[sS]$ ]] || return 1
+  local U=-Syu; [[ -d /run/archiso ]] && U=-Sy
+  "${SUDO[@]}" pacman "$U" --needed --noconfirm lutris wine-staging winetricks wine-mono wine-gecko \
+    || { echo "Falhou (sem internet ou pouco espaço)."; return 1; }
+  echo "Pronto."
+}
+case "${1:-}" in
+  install) install_bnet; read -rp "Enter para fechar..." _ ;;
+  *)
+    if ! command -v lutris >/dev/null 2>&1; then
+      if [[ -t 0 ]]; then install_bnet || { read -rp "Enter para fechar..." _; exit 1; }
+      else xterm -e "$0" install; fi
+    fi
+    command -v lutris >/dev/null 2>&1 && exec lutris ;;
+esac
+TOOL_EOF
+
+put 755 usr/local/bin/hkos-run <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-run - "Executar" (tecla Windows + R): digite o nome do programa
+exec dmenu_run -b -fn 'Liberation Sans-11' -nb '#000000' -nf '#e6e6e6' -sb '#e6e6e6' -sf '#000000' -p 'Executar:'
+TOOL_EOF
+put 644 $SK/.config/dunst/dunstrc <<'EOF'
+[global]
+    monitor = 0
+    follow = keyboard
+    width = (0, 340)
+    height = (0, 120)
+    origin = bottom-right
+    offset = (12, 48)
+    transparency = 0
+    frame_width = 1
+    frame_color = "#3a3a3a"
+    font = Liberation Sans 10
+    padding = 10
+    horizontal_padding = 12
+    corner_radius = 0
+    separator_height = 1
+    markup = full
+    format = "<b>%s</b>\n%b"
+    icon_position = left
+    max_icon_size = 40
+    sticky_history = no
+    mouse_left_click = close_current
+    mouse_right_click = close_all
+
+[urgency_low]
+    background = "#000000"
+    foreground = "#cccccc"
+    timeout = 4
+
+[urgency_normal]
+    background = "#000000"
+    foreground = "#ffffff"
+    timeout = 6
+
+[urgency_critical]
+    background = "#000000"
+    foreground = "#ffffff"
+    frame_color = "#ff5555"
+    timeout = 0
+EOF
+put 644 $SK/.config/pcmanfm/default/desktop-items-0.conf <<'EOF'
+[*]
+wallpaper_mode=crop
+wallpaper_common=1
+desktop_bg=#000000
+desktop_fg=#ffffff
+desktop_shadow=#000000
+desktop_font=Liberation Sans 10
+show_wm_menu=1
+sort=name;ascending;
+show_documents=0
+show_trash=1
+show_mounts=0
+EOF
+put 755 $SK/Desktop/Este-computador.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Este computador
+Exec=hkos-explorer
+Icon=computer
+Terminal=false
+EOF
+put 755 $SK/Desktop/Steam.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Steam
+Exec=steam
+Icon=steam
+Terminal=false
+EOF
+put 755 $SK/Desktop/Discord.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Discord
+Exec=discord
+Icon=discord
+Terminal=false
+EOF
+put 755 $SK/Desktop/Firefox.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Firefox
+Exec=firefox
+Icon=firefox
+Terminal=false
+EOF
+put 755 $SK/Desktop/Heroic.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Heroic
+Exec=hkos-heroic
+Icon=applications-games
+Terminal=false
+EOF
+put 644 usr/share/applications/hkos-heroic.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Heroic Games Launcher
+Comment=Epic, GOG e Amazon
+Exec=hkos-heroic
+Icon=applications-games
+Terminal=false
+Categories=Game;
+EOF
+put 644 etc/fonts/local.conf <<'EOF'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <!-- Visual parecido com o Windows: Arial/Courier equivalentes -->
+  <alias><family>sans-serif</family><prefer><family>Liberation Sans</family></prefer></alias>
+  <alias><family>serif</family><prefer><family>Liberation Serif</family></prefer></alias>
+  <alias><family>monospace</family><prefer><family>Liberation Mono</family></prefer></alias>
+</fontconfig>
+EOF
 put 644 $SK/.Xresources <<'EOF'
 Xft.dpi: 96
 xterm*faceName: DejaVu Sans Mono
@@ -302,11 +464,17 @@ xterm*utf8: 1
 EOF
 put 755 $SK/.config/openbox/autostart <<'EOF'
 xsetroot -cursor_name left_ptr &
-if [ -f /usr/share/wallpapers/HKOS/hkos.png ]; then
-  feh --no-fehbg --bg-fill /usr/share/wallpapers/HKOS/hkos.png &
+WALL=/usr/share/wallpapers/HKOS/hkos.png
+# Ícones na área de trabalho (Este computador, Lixeira...). Para desligar: touch ~/.config/hkos-no-desktop-icons
+if [ -f "$WALL" ] && command -v pcmanfm >/dev/null 2>&1 && [ ! -f "$HOME/.config/hkos-no-desktop-icons" ]; then
+  hkos-explorer --desktop &
+  ( sleep 2; pcmanfm --set-wallpaper="$WALL" --wallpaper-mode=crop ) &
+elif [ -f "$WALL" ]; then
+  feh --no-fehbg --bg-fill "$WALL" &
 else
   xsetroot -solid '#000000' &
 fi
+dunst &
 tint2 &
 nm-applet &
 volumeicon &
@@ -324,7 +492,7 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <item label="Steam"><action name="Execute"><command>steam</command></action></item>
   <item label="Discord"><action name="Execute"><command>discord</command></action></item>
   <item label="Firefox"><action name="Execute"><command>firefox</command></action></item>
-  <item label="Lutris (Battle.net)"><action name="Execute"><command>lutris</command></action></item>
+  <item label="Battle.net (Lutris)"><action name="Execute"><command>hkos-battlenet</command></action></item>
   <separator/>
   <item label="Terminal"><action name="Execute"><command>xterm</command></action></item>
   <item label="Volume"><action name="Execute"><command>pavucontrol</command></action></item>
@@ -375,7 +543,7 @@ border_color_hover = #e6e6e6 60
 background_color_pressed = #262626 100
 border_color_pressed = #e6e6e6 60
 
-panel_items = LTSC
+panel_items = BLTSC
 panel_size = 100% 36
 panel_margin = 0 0
 panel_padding = 4 3 4
@@ -385,6 +553,15 @@ panel_layer = top
 panel_monitor = all
 strut_policy = follow_size
 autohide = 0
+
+button = new
+button_text = HKOS
+button_font = Liberation Sans Bold 11
+button_font_color = #ffffff 100
+button_padding = 14 4 6
+button_background_id = 2
+button_tooltip = Menu Iniciar (Ctrl+Esc)
+button_lclick_command = xdotool key ctrl+Escape
 
 launcher_padding = 4 2 6
 launcher_background_id = 0
@@ -688,6 +865,9 @@ SHIPPED=(
   etc/X11/xorg.conf.d/30-hkos-mouse.conf
   etc/os-release etc/motd
   usr/share/applications/hkos-explorer.desktop
+  usr/share/applications/hkos-heroic.desktop
+  usr/share/hkos/keybinds.xml
+  etc/fonts/local.conf
   usr/share/hkos/ajuda.txt
 )
 [[ "$HAS_WALL" == 1 ]] && SHIPPED+=("$WALL")
@@ -710,6 +890,7 @@ case "${1:-}" in
   desktop)        rm -f "$F"; echo "Modo desktop ativado."; exit 0 ;;
   *) echo "uso: hkos-mode console | console-always | desktop"; exit 1 ;;
 esac
+command -v gamescope >/dev/null || echo "Aviso: o Gamescope não está instalado (hkos-loja). Sem ele o login abre o desktop normal."
 echo "Modo console ativado. Saindo do desktop..."
 [[ -n "${DISPLAY:-}" ]] && openbox --exit
 TOOL_EOF
@@ -997,6 +1178,12 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   Botao direito na area de trabalho ..... menu principal
   Botao do meio na area de trabalho ..... lista de janelas
   Tecla Windows + E ..................... explorador de arquivos
+  Tecla Windows + R ..................... executar um programa pelo nome
+  Ctrl + Esc / botao HKOS ............... menu Iniciar
+  Windows + setas ....................... cima maximiza, baixo minimiza,
+                                          esquerda/direita metade da tela
+  Icones da area de trabalho: para desligar rode
+    touch ~/.config/hkos-no-desktop-icons   (e faca login de novo)
   Alt+Tab ............................... trocar de janela
   Alt+F4 ................................ fechar janela
   Terminal: menu > Terminal (ou barra de baixo)
@@ -1055,7 +1242,9 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
     mangohud gamemoderun %command% .... os dois juntos
   Proton-GE: menu > Instalar Proton-GE, reinicie o Steam e escolha em
     Propriedades > Compatibilidade.
-  Battle.net: abra o Lutris e procure por "Battle.net".
+  Battle.net: menu > Battle.net (instala o Lutris e o Wine na 1a vez, ~1,5 GB;
+    no pendrive use so com o HKOS instalado no disco). Depois procure no Lutris.
+  Gamescope: nao vem instalado (mais leve). Instale em hkos-loja.
   Epic/GOG/Amazon: menu > Heroic (baixa na 1a vez, ~1 GB). Dentro dele,
     em Gerenciador de Wine, baixe o GE-Proton antes de instalar jogos.
   Ja vem ligado: mouse sem aceleracao, NTSYNC, threads OpenGL,
@@ -1132,6 +1321,8 @@ pkgs_for() { # nome-da-opção -> pacotes
     torrent)    echo "qbittorrent" ;;
     fetch)      echo "fastfetch" ;;
     archivers)  echo "p7zip unzip unrar" ;;
+    gamescope)  echo "gamescope" ;;
+    battlenet)  echo "lutris wine-staging winetricks wine-mono wine-gecko" ;;
   esac
 }
 
@@ -1150,7 +1341,9 @@ install_list() {
     obs       "OBS Studio (gravar e transmitir)" off \
     torrent   "qBittorrent" off \
     fetch     "fastfetch (info do sistema)" off \
-    archivers "Zip, 7z e RAR (p7zip, unzip, unrar)" off)" || return 0
+    archivers "Zip, 7z e RAR (p7zip, unzip, unrar)" off \
+    gamescope "Gamescope (modo console, tela cheia)" off \
+    battlenet "Battle.net (Lutris + Wine, ~1,5 GB)" off)" || return 0
   [[ -n "$sel" ]] || return 0
   for chosen in $sel; do
     for p in $(pkgs_for "$chosen"); do list+=("$p"); done
@@ -1313,7 +1506,7 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
 command -v dialog >/dev/null || { echo "dialog não encontrado."; exit 1; }
 if [[ ! -d /sys/firmware/efi ]]; then
-  echo "Este instalador precisa de boot UEFI. Reinicie em modo UEFI (ou use o archinstall)." >&2
+  echo "Este instalador precisa de boot UEFI. Reinicie em modo UEFI ." >&2
   exit 1
 fi
 if ! curl -fsS --max-time 8 https://archlinux.org >/dev/null 2>&1; then
@@ -1370,7 +1563,7 @@ echo "==> Aplicando ajustes do HKOS"
 while read -r f; do
   [[ -n "$f" ]] && install -D -m 0644 "/$f" "/mnt/$f"
 done < /usr/share/gameos/files.txt
-for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja; do
+for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja; do
   install -D -m 0755 "/usr/local/bin/$s" "/mnt/usr/local/bin/$s"
 done
 install -d /mnt/usr/share/hkos
@@ -1445,7 +1638,7 @@ cat <<'EOF'
 
 Instalação concluída! Remova o pendrive e reinicie.
 O sistema entra direto no desktop. Botão direito na área de trabalho abre o menu.
-Para o Battle.net: abra o Lutris. Para o Proton-GE: menu > Instalar Proton-GE.
+Para o Battle.net: menu > Battle.net. Para o Proton-GE: menu > Instalar Proton-GE.
 
 EOF
 INSTALLER_EOF

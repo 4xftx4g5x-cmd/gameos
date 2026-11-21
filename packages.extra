@@ -11,7 +11,6 @@ dkms
 
 # --- Base mínima ---
 sudo
-archinstall
 git
 nano
 htop
@@ -53,6 +52,11 @@ pcmanfm
 gvfs
 udisks2
 
+# --- Visual estilo Windows (notificações, Executar, botão Iniciar) ---
+dunst
+dmenu
+xdotool
+
 # --- Fontes (mínimo) ---
 ttf-dejavu
 ttf-liberation
@@ -84,15 +88,9 @@ gamemode
 lib32-gamemode
 mangohud
 lib32-mangohud
-gamescope
 scx-scheds
 
-# --- Battle.net (via Lutris). Para ficar ainda mais leve, apague estas 5 linhas ---
-lutris
-wine-staging
-winetricks
-wine-mono
-wine-gecko
+# Battle.net (Lutris + Wine) e Gamescope NÃO vêm no ISO (mais leve): hkos-battlenet / hkos-loja instalam sob demanda.
 
 # --- Aplicativos ---
 discord
