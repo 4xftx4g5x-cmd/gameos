@@ -49,7 +49,7 @@ feh
 adwaita-icon-theme
 
 # --- Explorador de arquivos leve (discos, pendrives, lixeira) ---
-pcmanfm-gtk3
+pcmanfm
 gvfs
 udisks2
 
