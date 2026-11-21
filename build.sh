@@ -95,7 +95,7 @@ sed -i \
   -e "/^file_permissions=(/a\\  [\"/$SK/.xinitrc\"]=\"0:0:755\"" \
   "$PROFILE/profiledef.sh"
 
-for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-fan hkos-ajuda hkos-loja; do
+for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-fan hkos-ajuda hkos-loja; do
   sed -i "/^file_permissions=(/a\\  [\"/usr/local/bin/$s\"]=\"0:0:755\"" "$PROFILE/profiledef.sh"
 done
 
@@ -209,7 +209,8 @@ if [ ! -f "$OB/rc.xml" ]; then
   sed -i -e 's|<name>Clearlooks</name>|<name>HKOS</name>|' \
          -e 's|<animateIconify>yes|<animateIconify>no|' \
          -e 's|<drawContents>yes|<drawContents>no|' \
-         -e 's|<number>4</number>|<number>1</number>|' "$OB/rc.xml"
+         -e 's|<number>4</number>|<number>1</number>|' \
+         -e 's|<keyboard>|<keyboard><keybind key="W-e"><action name="Execute"><command>hkos-explorer</command></action></keybind>|' "$OB/rc.xml"
 fi
 exec openbox-session
 EOF
@@ -283,6 +284,10 @@ button { background-image: none; background-color: #0a0a0a; border-color: #33333
 button:hover { background-color: #1a1a1a; }
 selection, *:selected { background-color: #e6e6e6; color: #000000; }
 EOF
+put 644 $SK/.config/mimeapps.list <<'EOF'
+[Default Applications]
+inode/directory=pcmanfm.desktop
+EOF
 put 644 $SK/.Xresources <<'EOF'
 Xft.dpi: 96
 xterm*faceName: DejaVu Sans Mono
@@ -315,6 +320,7 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
 <menu id="root-menu" label="HKOS">
+  <item label="Explorador de arquivos"><action name="Execute"><command>hkos-explorer</command></action></item>
   <item label="Steam"><action name="Execute"><command>steam</command></action></item>
   <item label="Discord"><action name="Execute"><command>discord</command></action></item>
   <item label="Firefox"><action name="Execute"><command>firefox</command></action></item>
@@ -326,6 +332,7 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <item label="Modo console (Steam em tela cheia)"><action name="Execute"><command>hkos-mode console</command></action></item>
   <item label="Ajustes HKOS"><action name="Execute"><command>xterm -e sudo hkos-tweaks</command></action></item>
   <item label="Ventoinha da placa de vídeo"><action name="Execute"><command>xterm -e hkos-fan</command></action></item>
+  <item label="Heroic (Epic, GOG, Amazon)"><action name="Execute"><command>hkos-heroic</command></action></item>
   <item label="Instalar Proton-GE"><action name="Execute"><command>xterm -e hkos-proton-ge</command></action></item>
   <item label="Loja (instalar programas e drivers)"><action name="Execute"><command>xterm -e hkos-loja</command></action></item>
   <item label="Ajuda e comandos"><action name="Execute"><command>xterm -e hkos-ajuda</command></action></item>
@@ -382,6 +389,7 @@ autohide = 0
 launcher_padding = 4 2 6
 launcher_background_id = 0
 launcher_icon_size = 26
+launcher_item_app = /usr/share/applications/hkos-explorer.desktop
 launcher_item_app = /usr/share/applications/firefox.desktop
 launcher_item_app = /usr/share/applications/steam.desktop
 launcher_item_app = /usr/share/applications/discord.desktop
@@ -679,6 +687,7 @@ SHIPPED=(
   etc/X11/xorg.conf.d/20-nvidia-coolbits.conf
   etc/X11/xorg.conf.d/30-hkos-mouse.conf
   etc/os-release etc/motd
+  usr/share/applications/hkos-explorer.desktop
   usr/share/hkos/ajuda.txt
 )
 [[ "$HAS_WALL" == 1 ]] && SHIPPED+=("$WALL")
@@ -723,6 +732,136 @@ echo
 echo "Pronto. Reinicie o Steam; nas propriedades do jogo, em Compatibilidade, escolha o Proton-GE."
 read -rp "Enter para fechar..." _
 TOOL_EOF
+
+put 755 usr/local/bin/hkos-heroic <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-heroic - instala (na 1ª vez) e abre o Heroic Games Launcher (Epic, GOG, Amazon).
+# O pacote do Heroic só existe no AUR; aqui baixa-se a versão oficial do GitHub (.tar.xz).
+DIR="${HKOS_HEROIC_DIR:-$HOME/.local/opt/heroic}"
+BIN="$DIR/heroic"
+API="${HKOS_HEROIC_API:-https://api.github.com/repos/Heroic-Games-Launcher/HeroicGamesLauncher/releases/latest}"
+
+install_heroic() {
+  command -v curl >/dev/null || { echo "curl ausente."; return 1; }
+  local free; free="$(df -Pm "$HOME" 2>/dev/null | awk 'NR==2{print $4}')"
+  if [[ "$free" =~ ^[0-9]+$ ]] && (( free < 1200 )); then
+    echo "Pouco espaço livre (${free} MB). O Heroic precisa de uns 1,2 GB."
+    echo "No modo live (pendrive) a memória é o limite: instale o HKOS no disco."
+    read -rp "Continuar mesmo assim? [s/N] " r; [[ "$r" =~ ^[sS]$ ]] || return 1
+  fi
+  echo "Buscando a versão mais recente do Heroic..."
+  local url tmp d
+  url="$(curl -fsSL "$API" | grep -o '"browser_download_url": *"[^"]*\.tar\.xz"' \
+        | cut -d'"' -f4 | grep -iv 'arm\|aarch' | head -1 || true)"
+  [[ -n "$url" ]] || { echo "Não achei o download (sem internet?)."; return 1; }
+  tmp="$(mktemp -d)" || return 1
+  echo "Baixando: $url"
+  if ! curl -fL --progress-bar "$url" -o "$tmp/heroic.tar.xz"; then echo "Falha no download."; rm -rf "$tmp"; return 1; fi
+  mkdir "$tmp/x"
+  if ! tar -xJf "$tmp/heroic.tar.xz" -C "$tmp/x"; then echo "Arquivo corrompido."; rm -rf "$tmp"; return 1; fi
+  d="$(find "$tmp/x" -maxdepth 2 -name heroic -type f | head -1)"
+  [[ -n "$d" ]] || { echo "Arquivo inesperado: executável não encontrado."; rm -rf "$tmp"; return 1; }
+  rm -rf "$DIR"; mkdir -p "$(dirname "$DIR")"
+  mv "$(dirname "$d")" "$DIR"; chmod +x "$BIN"
+  rm -rf "$tmp"
+  echo "Heroic instalado."
+}
+
+launch() {
+  local pid
+  "$BIN" >"$HOME/.heroic.log" 2>&1 & pid=$!
+  sleep 6
+  if ! kill -0 "$pid" 2>/dev/null; then   # fechou sozinho: tenta sem o sandbox do Chromium
+    "$BIN" --no-sandbox >"$HOME/.heroic.log" 2>&1 &
+  fi
+  disown 2>/dev/null || true
+}
+
+case "${1:-}" in
+  install) install_heroic; read -rp "Enter para fechar..." _ ;;
+  *)
+    if [[ ! -x "$BIN" ]]; then
+      if [[ -t 0 ]]; then install_heroic || { read -rp "Enter para fechar..." _; exit 1; }
+      else xterm -e "$0" install; fi
+    fi
+    [[ -x "$BIN" ]] && launch ;;
+esac
+TOOL_EOF
+
+put 755 usr/local/bin/hkos-explorer <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-explorer - explorador de arquivos leve (PCManFM) com a cara do HKOS.
+# Barra lateral: Downloads, Vídeos, Documentos, Imagens, Disco local e os discos/pendrives.
+command -v pcmanfm >/dev/null || { echo "pcmanfm não está instalado."; exit 1; }
+CFG="${XDG_CONFIG_HOME:-$HOME/.config}"
+mkdir -p "$HOME/Downloads" "$HOME/Videos" "$HOME/Documents" "$HOME/Pictures" \
+         "$CFG/pcmanfm/default" "$CFG/libfm" "$CFG/gtk-3.0"
+
+[[ -f "$CFG/pcmanfm/default/pcmanfm.conf" ]] || cat > "$CFG/pcmanfm/default/pcmanfm.conf" <<'EOF'
+[config]
+bm_open_method=0
+
+[volume]
+mount_on_startup=1
+mount_removable=1
+autorun=0
+
+[ui]
+always_show_tabs=0
+max_tab_chars=32
+win_width=1000
+win_height=620
+splitter_pos=200
+side_pane_mode=places
+view_mode=list
+show_hidden=0
+sort=name;ascending;
+toolbar=navigation;
+show_statusbar=1
+pathbar_mode_buttons=0
+EOF
+
+[[ -f "$CFG/libfm/libfm.conf" ]] || cat > "$CFG/libfm/libfm.conf" <<'EOF'
+[config]
+single_click=0
+use_trash=1
+confirm_del=1
+quick_exec=1
+terminal=xterm -e %s
+thumbnail_local=1
+thumbnail_max=2048
+
+[ui]
+big_icon_size=48
+small_icon_size=20
+pane_icon_size=20
+thumbnail_size=128
+EOF
+
+# Barra lateral: refeita sempre (o caminho da home muda de usuário para usuário)
+{
+  printf 'file://%s Downloads\n' "$HOME/Downloads"
+  printf 'file://%s Vídeos\n' "$HOME/Videos"
+  printf 'file://%s Documentos\n' "$HOME/Documents"
+  printf 'file://%s Imagens\n' "$HOME/Pictures"
+  printf 'file:/// Disco local\n'
+} | tee "$CFG/gtk-3.0/bookmarks" > "$HOME/.gtk-bookmarks"
+
+exec pcmanfm "${@:-$HOME}"
+TOOL_EOF
+
+put 644 usr/share/applications/hkos-explorer.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Explorador de arquivos
+Comment=Downloads, vídeos e discos
+Exec=hkos-explorer
+Icon=system-file-manager
+Terminal=false
+Categories=System;FileManager;
+EOF
+
+
 
 put 755 usr/local/bin/hkos-info <<'TOOL_EOF'
 #!/usr/bin/env bash
@@ -857,6 +996,7 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
 1) USO BASICO
   Botao direito na area de trabalho ..... menu principal
   Botao do meio na area de trabalho ..... lista de janelas
+  Tecla Windows + E ..................... explorador de arquivos
   Alt+Tab ............................... trocar de janela
   Alt+F4 ................................ fechar janela
   Terminal: menu > Terminal (ou barra de baixo)
@@ -868,6 +1008,8 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   hkos-fan ............. ventoinha da placa de video
   hkos-info ............ relatorio do sistema (salva ~/hkos-info.txt)
   hkos-proton-ge ....... baixa o Proton-GE para o Steam
+  hkos-heroic .......... instala e abre o Heroic (Epic, GOG, Amazon)
+  hkos-explorer ........ explorador de arquivos (atalho: tecla Windows + E)
   hkos-mode console .... Steam em tela cheia no proximo login
   hkos-mode desktop .... volta ao modo desktop
   sudo hkos-install .... instalar o HKOS no disco (APAGA o disco)
@@ -914,6 +1056,8 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   Proton-GE: menu > Instalar Proton-GE, reinicie o Steam e escolha em
     Propriedades > Compatibilidade.
   Battle.net: abra o Lutris e procure por "Battle.net".
+  Epic/GOG/Amazon: menu > Heroic (baixa na 1a vez, ~1 GB). Dentro dele,
+    em Gerenciador de Wine, baixe o GE-Proton antes de instalar jogos.
   Ja vem ligado: mouse sem aceleracao, NTSYNC, threads OpenGL,
     cache de shaders de 10 GB, tela sem protetor, perfil maximo.
   Mais FPS: feche o navegador e o Discord durante o jogo, use
@@ -982,7 +1126,6 @@ pkgs_for() { # nome-da-opção -> pacotes
     wifi_bcm)   echo "broadcom-wl-dkms" ;;
     sensors)    echo "lm_sensors" ;;
     nvtop)      echo "nvtop" ;;
-    files)      echo "pcmanfm" ;;
     mpv)        echo "mpv" ;;
     vlc)        echo "vlc" ;;
     obs)        echo "obs-studio" ;;
@@ -1002,7 +1145,6 @@ install_list() {
     wifi_bcm  "Wi-Fi Broadcom (broadcom-wl-dkms)" off \
     sensors   "Sensores de temperatura (lm_sensors)" off \
     nvtop     "Monitor da GPU (nvtop)" off \
-    files     "Gerenciador de arquivos (pcmanfm)" off \
     mpv       "Player de vídeo leve (mpv)" off \
     vlc       "VLC" off \
     obs       "OBS Studio (gravar e transmitir)" off \
@@ -1033,14 +1175,15 @@ main() {
   local C N Q note=""
   (( LIVE )) && note="Modo live: o que você instalar some ao reiniciar."
   while true; do
-    C="$(dialog --stdout --title "HKOS Loja" --menu "$note" 17 66 7 \
+    C="$(dialog --stdout --title "HKOS Loja" --menu "$note" 18 66 8 \
       1 "Programas e drivers (lista pronta)" \
       2 "Instalar pelo nome" \
       3 "Pesquisar" \
       4 "Atualizar o sistema" \
       5 "Remover programa" \
       6 "Ajuda e comandos" \
-      7 "Sair")" || exit 0
+      7 "Heroic Games Launcher (Epic/GOG)" \
+      8 "Sair")" || exit 0
     case "$C" in
       1) install_list ;;
       2) N="$(dialog --stdout --inputbox "Nome do(s) pacote(s):" 8 62)" || continue
@@ -1057,7 +1200,8 @@ main() {
          valid_names "$N" || { dialog --msgbox "Nome inválido." 6 30; continue; }
          clear; "${SUDO[@]}" pacman -Rns $N; pause ;;
       6) hkos-ajuda ;;
-      7) exit 0 ;;
+      7) hkos-heroic install ;;
+      8) exit 0 ;;
     esac
   done
 }
@@ -1226,7 +1370,7 @@ echo "==> Aplicando ajustes do HKOS"
 while read -r f; do
   [[ -n "$f" ]] && install -D -m 0644 "/$f" "/mnt/$f"
 done < /usr/share/gameos/files.txt
-for s in hkos-mode hkos-proton-ge hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja; do
+for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja; do
   install -D -m 0755 "/usr/local/bin/$s" "/mnt/usr/local/bin/$s"
 done
 install -d /mnt/usr/share/hkos

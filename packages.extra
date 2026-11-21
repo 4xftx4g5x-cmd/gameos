@@ -48,6 +48,11 @@ tint2
 feh
 adwaita-icon-theme
 
+# --- Explorador de arquivos leve (discos, pendrives, lixeira) ---
+pcmanfm-gtk3
+gvfs
+udisks2
+
 # --- Fontes (mínimo) ---
 ttf-dejavu
 ttf-liberation
