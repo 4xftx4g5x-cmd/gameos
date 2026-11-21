@@ -23,7 +23,7 @@ put() { mkdir -p "$(dirname "$AIROOT/$2")"; rm -f "$AIROOT/$2"; cat > "$AIROOT/$
 rm -rf "$WORK"
 mkdir -p "$PROFILE" "$OUT"
 cp -r "$RELENG"/. "$PROFILE/"
-cp -rT "$HERE/airootfs" "$AIROOT"
+[[ -d "$HERE/airootfs" ]] && cp -rT "$HERE/airootfs" "$AIROOT"
 
 ###############################################################################
 # 1) PACOTES: tira tudo que não é essencial e põe os do HKOS
@@ -66,7 +66,7 @@ archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'
 archiso_image="/boot/initramfs-linux-zen.img"
 EOF
 
-LIVE_CMD='mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1'
+LIVE_CMD='mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1 iommu=pt workqueue.power_efficient=0 cpufreq.default_governor=performance amd_pstate=active usbhid.mousepoll=1 i915.enable_psr=0'
 for d in grub syslinux efiboot; do
   [[ -d "$PROFILE/$d" ]] || continue
   find "$PROFILE/$d" -type f -exec sed -i \
@@ -200,13 +200,16 @@ EOF
 put 755 $SK/.xinitrc <<'EOF'
 #!/bin/sh
 xrdb -merge "$HOME/.Xresources"
-xset s off -dpms
+xset s off s noblank -dpms b off
+xset r rate 250 40
 OB="$HOME/.config/openbox"
 if [ ! -f "$OB/rc.xml" ]; then
   mkdir -p "$OB"
   cp /etc/xdg/openbox/rc.xml "$OB/rc.xml"
   sed -i -e 's|<name>Clearlooks</name>|<name>HKOS</name>|' \
-         -e 's|<animateIconify>yes|<animateIconify>no|' "$OB/rc.xml"
+         -e 's|<animateIconify>yes|<animateIconify>no|' \
+         -e 's|<drawContents>yes|<drawContents>no|' \
+         -e 's|<number>4</number>|<number>1</number>|' "$OB/rc.xml"
 fi
 exec openbox-session
 EOF
@@ -443,7 +446,11 @@ put 644 etc/firefox/policies/policies.json <<'EOF'
     "Preferences": {
       "media.ffmpeg.vaapi.enabled": { "Value": true, "Status": "default" },
       "ui.systemUsesDarkTheme": { "Value": 1, "Status": "default" },
-      "layout.css.prefers-color-scheme.content-override": { "Value": 0, "Status": "default" }
+      "layout.css.prefers-color-scheme.content-override": { "Value": 0, "Status": "default" },
+      "browser.tabs.unloadOnLowMemory": { "Value": true, "Status": "default" },
+      "dom.ipc.processCount": { "Value": 4, "Status": "default" },
+      "browser.sessionstore.interval": { "Value": 60000, "Status": "default" },
+      "media.hardware-video-decoding.force-enabled": { "Value": true, "Status": "default" }
     }
   }
 }
@@ -474,6 +481,7 @@ w /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor - - - - performance
 w /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference - - - - performance
 w /sys/class/scsi_host/host*/link_power_management_policy - - - - max_performance
 w /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise
 EOF
 put 644 etc/tmpfiles.d/gameos-power.conf <<'EOF'
 # HKOS - perfil MÁXIMO: nada de economia de energia
@@ -507,10 +515,14 @@ EOF
 put 644 etc/default/scx <<'EOF'
 # Agendador sched_ext (como CachyOS/Bazzite): LAVD, feito para jogos e baixa latência
 SCX_SCHEDULER=scx_lavd
+SCX_FLAGS='--performance'
 EOF
 put 644 etc/NetworkManager/conf.d/20-hkos.conf <<'EOF'
 [connection]
 wifi.powersave=2
+
+[connectivity]
+enabled=false
 EOF
 put 644 etc/modules-load.d/gameos.conf <<'EOF'
 # BBR (rede) e NTSYNC (sincronização rápida do Wine/Proton)
@@ -523,14 +535,37 @@ desiredgov=performance
 softrealtime=auto
 renice=10
 inhibit_screensaver=1
+ioprio=0
+disable_splitlock=1
+
+[gpu]
+apply_gpu_optimisations=accept-responsibility
+gpu_device=0
+nv_powermizer_mode=1
+amd_performance_level=high
 EOF
 put 644 etc/environment <<'EOF'
 __GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1
 MESA_SHADER_CACHE_MAX_SIZE=10G
+PROTON_USE_NTSYNC=1
+WINEDEBUG=-all
+DXVK_LOG_LEVEL=none
+VKD3D_DEBUG=none
+VKD3D_SHADER_DEBUG=none
+EOF
+put 644 etc/X11/xorg.conf.d/30-hkos-mouse.conf <<'EOF'
+# Mouse sem aceleração (mira consistente nos jogos)
+Section "InputClass"
+    Identifier "hkos-mouse-flat"
+    MatchIsPointer "on"
+    MatchDriver "libinput"
+    Option "AccelProfile" "flat"
+    Option "AccelSpeed" "0"
+EndSection
 EOF
 put 644 etc/sysctl.d/99-gameos.conf <<'EOF'
 # HKOS - memória, agendador e rede para jogos
-vm.swappiness = 100
+vm.swappiness = 150
 vm.page-cluster = 0
 vm.vfs_cache_pressure = 50
 vm.watermark_boost_factor = 0
@@ -542,6 +577,8 @@ vm.dirty_writeback_centisecs = 1500
 vm.max_map_count = 2147483642
 
 kernel.nmi_watchdog = 0
+kernel.numa_balancing = 0
+vm.stat_interval = 10
 kernel.split_lock_mitigate = 0
 kernel.sched_autogroup_enabled = 1
 kernel.printk = 3 3 3 3
@@ -559,12 +596,66 @@ net.core.somaxconn = 4096
 net.core.netdev_max_backlog = 16384
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
+net.core.rmem_default = 1048576
+net.core.wmem_default = 1048576
+net.ipv4.tcp_rmem = 4096 131072 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+net.ipv4.tcp_timestamps = 0
+vm.zone_reclaim_mode = 0
+fs.aio-max-nr = 1048576
 EOF
+
+put 644 etc/udev/rules.d/60-ioschedulers.rules <<'EOF'
+# NVMe: sem escalonador; SSD SATA: mq-deadline; HDD: bfq
+ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none"
+ACTION=="add|change", KERNEL=="sd[a-z]|mmcblk[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+EOF
+put 644 etc/udev/rules.d/61-hkos-block.rules <<'EOF'
+# Discos: sem entropia, conclusão de I/O no mesmo núcleo, leitura antecipada por tipo
+ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*|sd[a-z]|mmcblk[0-9]*", ATTR{queue/add_random}="0", ATTR{queue/rq_affinity}="2"
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/read_ahead_kb}="1024"
+ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*|sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/read_ahead_kb}="256"
+EOF
+put 644 etc/systemd/zram-generator.conf.d/gameos.conf <<'EOF'
+[zram0]
+zram-size = min(ram / 2, 8192)
+compression-algorithm = lz4
+swap-priority = 100
+fs-type = swap
+EOF
+put 644 etc/security/limits.d/10-gameos.conf <<'EOF'
+*       soft    nofile  524288
+*       hard    nofile  1048576
+@audio  -       rtprio  95
+@audio  -       memlock unlimited
+EOF
+put 644 etc/modprobe.d/gameos.conf <<'EOF'
+# NVIDIA: modo DRM, tabela PAT, sem zerar memória de sistema a cada alocação
+options nvidia_drm modeset=1 fbdev=1
+options nvidia NVreg_PreserveVideoMemoryAllocations=1 NVreg_UsePageAttributeTable=1 NVreg_InitializeSystemMemoryAllocations=0
+blacklist iTCO_wdt
+blacklist sp5100_tco
+EOF
+put 644 etc/X11/xorg.conf.d/40-hkos-serverflags.conf <<'EOF'
+Section "ServerFlags"
+    Option "BlankTime" "0"
+    Option "StandbyTime" "0"
+    Option "SuspendTime" "0"
+    Option "OffTime" "0"
+EndSection
+EOF
+# Serviços e timers que só gastam CPU/disco em segundo plano
+for u in man-db.timer shadow.timer archlinux-keyring-wkd-sync.timer systemd-journald-audit.socket NetworkManager-wait-online.service; do
+  mkdir -p "$AIROOT/etc/systemd/system"; ln -sf /dev/null "$AIROOT/etc/systemd/system/$u"
+done
 
 # Arquivos que o instalador copia para o sistema instalado
 SHIPPED=(
   etc/sysctl.d/99-gameos.conf
   etc/udev/rules.d/60-ioschedulers.rules
+  etc/udev/rules.d/61-hkos-block.rules
+  etc/X11/xorg.conf.d/40-hkos-serverflags.conf
   etc/systemd/zram-generator.conf.d/gameos.conf
   etc/security/limits.d/10-gameos.conf
   etc/modprobe.d/gameos.conf
@@ -586,6 +677,7 @@ SHIPPED=(
   etc/vconsole.conf
   etc/X11/xorg.conf.d/00-keyboard.conf
   etc/X11/xorg.conf.d/20-nvidia-coolbits.conf
+  etc/X11/xorg.conf.d/30-hkos-mouse.conf
   etc/os-release etc/motd
   usr/share/hkos/ajuda.txt
 )
@@ -822,6 +914,20 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   Proton-GE: menu > Instalar Proton-GE, reinicie o Steam e escolha em
     Propriedades > Compatibilidade.
   Battle.net: abra o Lutris e procure por "Battle.net".
+  Ja vem ligado: mouse sem aceleracao, NTSYNC, threads OpenGL,
+    cache de shaders de 10 GB, tela sem protetor, perfil maximo.
+  Mais FPS: feche o navegador e o Discord durante o jogo, use
+    "gamemoderun %command%" e deixe o jogo em tela cheia exclusiva.
+  Se o jogo travar com Proton: troque a versao (Proton-GE) e tente.
+  Por jogo (Opcoes de inicializacao do Steam), teste um de cada vez:
+    LD_PRELOAD="" %command% ........ tira o overlay do Steam (acaba travadas)
+    __GL_THREADED_OPTIMIZATIONS=1 %command% ... OpenGL em varias threads (NVIDIA)
+    __GL_SYNC_TO_VBLANK=0 __GL_VRR_ALLOWED=0 %command% ... sem V-Sync (mais FPS, rasga)
+    __GL_MaxFramesAllowed=1 %command% ... menos atraso de imagem
+    mesa_glthread=true %command% ..... OpenGL em threads (AMD/Intel)
+  No Steam > Configuracoes > Downloads: desmarque o pre-cache de shaders.
+  Tambem ligado: mouse a 1000 Hz, GPU em desempenho pelo GameMode,
+    disco com leitura/fila ajustadas, logs do Wine desligados.
   Jogos com anti-cheat de kernel (Valorant etc.) nao rodam no Linux.
 
 7) PROGRAMAS DO AUR (nao vem instalado)
@@ -1017,7 +1123,8 @@ set_power() { # max | balanced
 set_scx() { # scx_lavd | scx_bpfland | off
   if [[ $1 == off ]]; then systemctl disable --now scx.service 2>/dev/null || true
   else
-    echo "SCX_SCHEDULER=$1" > /etc/default/scx
+    if [[ $1 == scx_lavd ]]; then F="--performance"; else F="-m performance"; fi
+    printf "SCX_SCHEDULER=%s\nSCX_FLAGS='%s'\n" "$1" "$F" > /etc/default/scx
     systemctl enable scx.service 2>/dev/null || true
     systemctl restart scx.service 2>/dev/null || true
   fi
@@ -1123,7 +1230,7 @@ genfstab -U /mnt >> /mnt/etc/fstab
 sed -i 's/\brelatime\b/noatime/g' /mnt/etc/fstab
 
 # --- 4) Configura dentro do sistema novo ---
-CMD='quiet loglevel=3 mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1'
+CMD='quiet loglevel=3 mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1 iommu=pt workqueue.power_efficient=0 cpufreq.default_governor=performance amd_pstate=active usbhid.mousepoll=1 i915.enable_psr=0'
 ROOT_UUID="$(blkid -s UUID -o value "$ROOT")"
 cat > /mnt/root/hkos-setup.sh <<'SETUP_EOF'
 #!/usr/bin/env bash
@@ -1156,6 +1263,7 @@ systemctl enable scx.service || true
 systemctl enable nvidia-persistenced.service || true
 systemctl enable systemd-boot-update.service || true
 systemctl disable NetworkManager-wait-online.service || true
+systemctl mask man-db.timer shadow.timer archlinux-keyring-wkd-sync.timer || true
 SETUP_EOF
 chmod 755 /mnt/root/hkos-setup.sh
 echo "$USERN:$PASS1" > /mnt/root/.hkos-pw
