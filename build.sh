@@ -631,9 +631,9 @@ put 644 etc/security/limits.d/10-gameos.conf <<'EOF'
 @audio  -       memlock unlimited
 EOF
 put 644 etc/modprobe.d/gameos.conf <<'EOF'
-# NVIDIA: modo DRM, tabela PAT, sem zerar memória de sistema a cada alocação
+# NVIDIA: modo DRM e sem zerar memória de sistema a cada alocação (igual ao CachyOS)
 options nvidia_drm modeset=1 fbdev=1
-options nvidia NVreg_PreserveVideoMemoryAllocations=1 NVreg_UsePageAttributeTable=1 NVreg_InitializeSystemMemoryAllocations=0
+options nvidia NVreg_PreserveVideoMemoryAllocations=1 NVreg_InitializeSystemMemoryAllocations=0
 blacklist iTCO_wdt
 blacklist sp5100_tco
 EOF
@@ -949,6 +949,12 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   systemctl poweroff ................ desligar
 
 9) SE ALGO DER ERRADO
+  Steam, Firefox ou Discord nao abrem? No terminal rode um por vez:
+    firefox 2>&1 | tail -20
+    steam 2>&1 | tail -30
+    discord 2>&1 | tail -20
+  e depois:  journalctl -b -p 3 | tail -30
+  Guarde o texto que aparecer.
   Rode hkos-info e guarde o texto (~/hkos-info.txt) para pedir ajuda.
 HELP_EOF
 
