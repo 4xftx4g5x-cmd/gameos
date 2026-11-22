@@ -5,10 +5,14 @@ on:
   push:
     tags: ["v*"]
 
+env:
+  # Mude este número para recompilar o kernel linux-hkos (ex.: kernel novo no Arch).
+  KERNEL_REV: "1"
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -17,14 +21,28 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
+      - name: Restaurar kernel linux-hkos já compilado
+        uses: actions/cache/restore@v4
+        with:
+          path: kcache
+          key: hkos-kernel-${{ env.KERNEL_REV }}
+
       - name: Gerar a ISO (container Arch Linux)
         run: |
-          mkdir -p out
+          mkdir -p out kcache
           docker run --rm --privileged \
             -v "$PWD":/work \
             -e OUT=/work/out \
+            -e KCACHE=/work/kcache \
             archlinux:latest \
             bash -c "pacman -Syu --noconfirm archiso && bash /work/build.sh"
+
+      - name: Guardar kernel linux-hkos compilado
+        if: hashFiles('kcache/*.zst') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: kcache
+          key: hkos-kernel-${{ env.KERNEL_REV }}
 
       - name: Enviar a ISO
         uses: actions/upload-artifact@v4
