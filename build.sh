@@ -97,10 +97,11 @@ sed -i \
   -e "s|^airootfs_image_tool_options=.*|airootfs_image_tool_options=('-comp' 'zstd' '-Xcompression-level' '15' '-b' '1M')|" \
   -e '/^file_permissions=(/a\  ["/usr/local/bin/hkos-install"]="0:0:755"' \
   -e '/^file_permissions=(/a\  ["/etc/sudoers.d/10-gameos"]="0:0:440"' \
+  -e '/^file_permissions=(/a\  ["/etc/sudoers.d/20-hkos-gpu"]="0:0:440"' \
   -e "/^file_permissions=(/a\\  [\"/$SK/.xinitrc\"]=\"0:0:755\"" \
   "$PROFILE/profiledef.sh"
 
-for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-fan hkos-ajuda hkos-loja; do
+for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-fan hkos-ajuda hkos-loja; do
   sed -i "/^file_permissions=(/a\\  [\"/usr/local/bin/$s\"]=\"0:0:755\"" "$PROFILE/profiledef.sh"
 done
 
@@ -331,6 +332,438 @@ case "${1:-}" in
 esac
 TOOL_EOF
 
+put 755 usr/local/bin/hkos-game-root <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-game-root - parte root do hkos-game (agendador e modo do V-Cache). Só comandos fixos.
+SCXF="${HKOS_SCX_FILE:-/etc/default/scx}"
+case "${1:-}" in
+  sched)
+    case "${2:-}" in
+      lavd)    S=scx_lavd;    F='--performance' ;;
+      bpfland) S=scx_bpfland; F='-m performance' ;;
+      off)     systemctl stop scx.service; exit $? ;;
+      *) exit 2 ;;
+    esac
+    printf "SCX_SCHEDULER=%s\nSCX_FLAGS='%s'\n" "$S" "$F" > "$SCXF" && systemctl restart scx.service ;;
+  x3d)
+    case "${2:-}" in cache|frequency) ;; *) exit 2 ;; esac
+    f="$(ls ${HKOS_X3D_GLOB:-/sys/bus/platform/drivers/amd_x3d_vcache/*/amd_x3d_mode} 2>/dev/null | head -1)"
+    [[ -n "$f" ]] || exit 3
+    echo "$2" > "$f" ;;
+  *) echo "uso: hkos-game-root sched lavd|bpfland|off | x3d cache|frequency" >&2; exit 1 ;;
+esac
+TOOL_EOF
+
+put 755 usr/local/bin/hkos-game <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-game - roda um jogo com ajustes de FPS e latência.
+# Steam > Propriedades > Opções de inicialização:   hkos-game %command%
+CFGDIR="${HKOS_GAME_DIR:-$HOME/.config/hkos-game}"
+if [[ -n "${HKOS_GAME_ROOT:-}" ]]; then ROOT=("$HKOS_GAME_ROOT")
+elif [[ $EUID -eq 0 ]]; then ROOT=(/usr/local/bin/hkos-game-root)
+else ROOT=(sudo -n /usr/local/bin/hkos-game-root); fi
+SCXF="${HKOS_SCX_FILE:-/etc/default/scx}"
+X3DGLOB="${HKOS_X3D_GLOB:-/sys/bus/platform/drivers/amd_x3d_vcache/*/amd_x3d_mode}"
+
+NOVSYNC=0 LOWLAT=0 GLTHREADS=0 NOOVERLAY=0 GAMEMODE=1 MANGO=0 X3D=0
+FPS="" SCHED="" PIN="" RESERVE=""
+REST=()
+
+usage() { cat <<'EOF'
+hkos-game [opções] %command%        (no Steam: Opções de inicialização)
+  --novsync      sem V-Sync/VRR (mais FPS, a imagem pode rasgar)
+  --fps N        limita o FPS (frame pacing mais estável)
+  --lowlat       menos fila de quadros e CPU sem dormir (menos latência)
+  --glthreads    OpenGL em várias threads (teste jogo a jogo)
+  --nooverlay    tira o overlay do Steam (acaba travadas em alguns jogos)
+  --mangohud     mostra FPS e temperaturas
+  --nogamemode   não usa o GameMode (padrão: usa)
+  --sched lavd|bpfland|off   troca o agendador só durante o jogo
+  --pin 0-5      roda o jogo só nesses núcleos
+  --reserve N    deixa N núcleos livres para o sistema (Discord, navegador)
+  --x3d          CPU AMD X3D: prioriza o V-Cache durante o jogo
+  --noprofile    ignora o perfil salvo do jogo
+Perfis por jogo (usam o AppID do Steam):
+  hkos-game save APPID [opções]      salva as opções para aquele jogo
+  hkos-game list                     lista os perfis
+  hkos-game remove APPID             apaga um perfil
+  Depois basta usar:  hkos-game %command%
+EOF
+}
+die() { echo "hkos-game: opção inválida. Veja: hkos-game help" >&2; exit 2; }
+
+parse() {
+  REST=()
+  while (( $# )); do
+    case "$1" in
+      --novsync) NOVSYNC=1 ;;   --lowlat) LOWLAT=1 ;;     --glthreads) GLTHREADS=1 ;;
+      --nooverlay) NOOVERLAY=1 ;; --nogamemode) GAMEMODE=0 ;; --mangohud) MANGO=1 ;;
+      --x3d) X3D=1 ;;            --noprofile) ;;
+      --fps)     shift; [[ "${1:-}" =~ ^[0-9]{1,4}$ ]] || die; FPS="$1" ;;
+      --sched)   shift; case "${1:-}" in lavd|bpfland|off) SCHED="$1" ;; *) die ;; esac ;;
+      --pin)     shift; [[ "${1:-}" =~ ^[0-9,-]+$ ]] || die; PIN="$1" ;;
+      --reserve) shift; [[ "${1:-}" =~ ^[0-9]{1,2}$ ]] || die; RESERVE="$1" ;;
+      --) shift; REST=("$@"); return 0 ;;
+      *)  REST=("$@"); return 0 ;;
+    esac
+    shift
+  done
+}
+
+case "${1:-}" in
+  help|-h|--help|"") usage; exit 0 ;;
+  list)   mkdir -p "$CFGDIR"; for f in "$CFGDIR"/*.conf; do [[ -e "$f" ]] && echo "$(basename "$f" .conf): $(cat "$f")"; done; exit 0 ;;
+  remove) [[ "${2:-}" =~ ^[0-9]+$ ]] || die; rm -f "$CFGDIR/$2.conf"; echo "Perfil $2 removido."; exit 0 ;;
+  save)
+    [[ "${2:-}" =~ ^[0-9]+$ ]] || die
+    id="$2"; shift 2; parse "$@"; (( ${#REST[@]} == 0 )) || die
+    mkdir -p "$CFGDIR"; echo "$*" > "$CFGDIR/$id.conf"; echo "Perfil do jogo $id salvo: $*"; exit 0 ;;
+esac
+
+# perfil do jogo (AppID vem do Steam), depois as opções da linha de comando
+noprof=0; for a in "$@"; do [[ "$a" == --noprofile ]] && noprof=1; done
+if (( ! noprof )) && [[ "${SteamAppId:-}" =~ ^[0-9]+$ && -f "$CFGDIR/$SteamAppId.conf" ]]; then
+  read -ra P < "$CFGDIR/$SteamAppId.conf"; parse "${P[@]}"
+fi
+parse "$@"
+(( ${#REST[@]} > 0 )) || { usage; exit 1; }
+
+# ---- ambiente ----
+(( NOVSYNC ))   && export __GL_SYNC_TO_VBLANK=0 __GL_VRR_ALLOWED=0 vblank_mode=0
+(( GLTHREADS )) && export __GL_THREADED_OPTIMIZATIONS=1 mesa_glthread=true
+(( LOWLAT ))    && export __GL_MaxFramesAllowed=1
+(( NOOVERLAY )) && export LD_PRELOAD=""
+USE_MANGO=$MANGO
+if [[ -n "$FPS" ]]; then
+  export DXVK_FRAME_RATE="$FPS"
+  export MANGOHUD_CONFIG="fps_limit=$FPS$( (( MANGO )) || echo ',no_display' )"
+  USE_MANGO=1
+fi
+
+# núcleos livres para o sistema
+if [[ -z "$PIN" && -n "$RESERVE" ]]; then
+  n="$(nproc --all 2>/dev/null || echo 1)"
+  (( n > RESERVE )) && PIN="0-$(( n - RESERVE - 1 ))"
+fi
+
+# CPU sem dormir (cpu_dma_latency), só enquanto o jogo roda
+LATFD=""
+if (( LOWLAT )) && exec {LATFD}<>/dev/cpu_dma_latency 2>/dev/null; then printf '\0\0\0\0' >&"$LATFD"; else LATFD=""; fi
+
+# agendador e V-Cache (guardam o estado anterior para restaurar)
+prev_sched="$(grep -m1 '^SCX_SCHEDULER=' "$SCXF" 2>/dev/null | cut -d= -f2 | tr -d "'\"")"
+prev_active="$(systemctl is-active scx.service 2>/dev/null)"
+x3dfile="$(ls $X3DGLOB 2>/dev/null | head -1)"; prev_x3d=""
+[[ -n "$x3dfile" ]] && prev_x3d="$(tr -d '[:space:]' < "$x3dfile" 2>/dev/null)"
+changed_sched=0; changed_x3d=0
+[[ -n "$SCHED" ]] && "${ROOT[@]}" sched "$SCHED" 2>/dev/null && changed_sched=1
+if (( X3D )) && [[ -n "$x3dfile" ]]; then "${ROOT[@]}" x3d cache 2>/dev/null && changed_x3d=1; fi
+
+restore() {
+  if (( changed_sched )); then
+    case "$prev_sched" in
+      scx_lavd)    "${ROOT[@]}" sched lavd 2>/dev/null ;;
+      scx_bpfland) "${ROOT[@]}" sched bpfland 2>/dev/null ;;
+    esac
+    [[ "$prev_active" == active ]] || "${ROOT[@]}" sched off 2>/dev/null
+  fi
+  if (( changed_x3d )) && [[ "$prev_x3d" =~ ^(cache|frequency)$ ]]; then "${ROOT[@]}" x3d "$prev_x3d" 2>/dev/null; fi
+  [[ -n "$LATFD" ]] && exec {LATFD}>&-
+  return 0
+}
+
+CMD=()
+[[ -n "$PIN" ]] && command -v taskset >/dev/null && CMD+=(taskset -c "$PIN")
+(( GAMEMODE )) && command -v gamemoderun >/dev/null && CMD+=(gamemoderun)
+(( USE_MANGO )) && command -v mangohud >/dev/null && CMD+=(mangohud)
+CMD+=("${REST[@]}")
+
+"${CMD[@]}" & pid=$!
+trap 'kill -TERM "$pid" 2>/dev/null' TERM INT
+wait "$pid"; rc=$?
+restore
+exit "$rc"
+TOOL_EOF
+
+put 755 usr/local/bin/hkos-bench <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-bench - mede FPS médio, 1% low e 0,1% low com o MangoHud.
+# Steam > Opções de inicialização:   hkos-bench -t 120 %command%     (ou:  hkos-bench -n "antes" -t 120 %command%)
+# Depois:  hkos-bench show   |   hkos-bench compare   (compara as duas últimas medições)
+BASE="${HKOS_BENCH_DIR:-$HOME/.local/share/hkos-bench}"
+RES="$BASE/resultados.txt"
+
+calc() { # calc arquivo.csv  ->  "media 1low 01low amostras"
+  local f="$1" tmp; tmp="$(mktemp)"
+  awk -F, 'hdr==0 && $1=="fps" { for(i=1;i<=NF;i++) if($i=="frametime") c=i; hdr=1; next }
+           hdr && c && ($c+0)>0 { print $c+0 }' "$f" | sort -rn > "$tmp"
+  awk '{a[NR]=$1; s+=$1}
+       END{ if(NR==0){print "0 0 0 0"; exit}
+            n1=int(NR*0.01); if(n1<1)n1=1; n2=int(NR*0.001); if(n2<1)n2=1
+            for(i=1;i<=n1;i++) t1+=a[i]; for(i=1;i<=n2;i++) t2+=a[i]
+            printf "%.1f %.1f %.1f %d\n", 1000/(s/NR), 1000/(t1/n1), 1000/(t2/n2), NR }' "$tmp"
+  rm -f "$tmp"
+}
+fmt() { awk -v n="$1" '{printf "%s: média %s FPS | 1%% low %s | 0,1%% low %s (%s quadros)\n", n, $1,$2,$3,$4}'; }
+
+case "${1:-}" in
+  show)    if [[ -f "$RES" ]]; then awk -F'|' '{printf "%-16s média %7.1f | 1%% low %7.1f | 0,1%% low %7.1f\n", $1,$2,$3,$4}' "$RES"; else echo "Nenhuma medição ainda."; fi; exit 0 ;;
+  compare)
+    [[ -f "$RES" ]] && (( $(wc -l < "$RES") >= 2 )) || { echo "Faça duas medições primeiro."; exit 1; }
+    a="$(tail -2 "$RES" | head -1)"; b="$(tail -1 "$RES")"
+    IFS='|' read -r na ma la1 la2 _ <<<"$a"; IFS='|' read -r nb mb lb1 lb2 _ <<<"$b"
+    awk -v na="$na" -v nb="$nb" -v ma="$ma" -v mb="$mb" -v la="$la1" -v lb="$lb1" -v xa="$la2" -v xb="$lb2" 'BEGIN{
+      printf "%-14s média %6.1f | 1%% low %6.1f | 0,1%% low %6.1f\n", na, ma, la, xa
+      printf "%-14s média %6.1f | 1%% low %6.1f | 0,1%% low %6.1f\n", nb, mb, lb, xb
+      printf "Diferença: média %+.1f%% | 1%% low %+.1f%% | 0,1%% low %+.1f%%\n", (mb-ma)*100/ma, (lb-la)*100/la, (xb-xa)*100/xa }'
+    exit 0 ;;
+  help|-h|--help|"") sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+T=120; NAME="medicao-$(date +%H%M)"
+while [[ "${1:-}" == -* ]]; do
+  case "$1" in
+    -t) shift; [[ "${1:-}" =~ ^[0-9]{1,4}$ ]] || { echo "tempo inválido"; exit 2; }; T="$1" ;;
+    -n) shift; NAME="$(printf '%s' "${1:-}" | tr -cd 'A-Za-z0-9 ._-')" ;;
+    --) shift; break ;;
+    *)  echo "opção inválida"; exit 2 ;;
+  esac; shift
+done
+(( $# > 0 )) || { echo "uso: hkos-bench [-t segundos] [-n nome] -- comando"; exit 1; }
+command -v mangohud >/dev/null || { echo "mangohud ausente."; exit 1; }
+
+DIR="$BASE/logs/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$DIR"
+export MANGOHUD=1 MANGOHUD_CONFIG="output_folder=$DIR,log_duration=$T,autostart_log=10,no_display"
+mangohud "$@"; rc=$?
+F="$(ls -t "$DIR"/*.csv 2>/dev/null | grep -v summary | head -1)"
+if [[ -n "$F" ]]; then
+  read -r m l1 l01 n < <(calc "$F")
+  if (( n > 0 )); then
+    mkdir -p "$BASE"; echo "$NAME|$m|$l1|$l01|$n" >> "$RES"
+    out="$(echo "$m $l1 $l01 $n" | fmt "$NAME")"; echo "$out"; echo "$out" > "$HOME/hkos-bench-ultimo.txt"
+    command -v notify-send >/dev/null && notify-send "HKOS Bench" "$out"
+  fi
+else
+  echo "Sem log do MangoHud (o jogo fechou antes de 10 s?)."
+fi
+exit "$rc"
+TOOL_EOF
+
+put 755 usr/local/bin/hkos-gpu-root <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-gpu-root - parte root do hkos-gpu. Só aceita comandos fixos com números validados.
+DRM="${HKOS_DRM:-/sys/class/drm}"
+isint() { [[ "${1:-}" =~ ^[0-9]{1,5}$ ]]; }
+amd_dev() { local c; for c in "$DRM"/card*/device; do grep -qs 0x1002 "$c/vendor" && { echo "$c"; return 0; }; done; return 1; }
+amd_hw() { local h; h="$(ls -d "$1"/hwmon/hwmon* 2>/dev/null | head -1)"; [[ -n "$h" ]] && echo "$h"; }
+cmd="${1:-}"; arg="${2:-}"
+case "$cmd" in
+  nv-power)  isint "$arg" && (( arg >= 20 && arg <= 600 )) || exit 2; exec nvidia-smi -pl "$arg" ;;
+  nv-lock)   isint "$arg" && (( arg >= 300 && arg <= 4000 )) || exit 2; exec nvidia-smi -lgc "300,$arg" ;;
+  nv-unlock) exec nvidia-smi -rgc ;;
+  nv-power-default)
+    d="$(nvidia-smi --query-gpu=power.default_limit --format=csv,noheader,nounits 2>/dev/null | head -1)"; d="${d%.*}"
+    isint "$d" || exit 3; exec nvidia-smi -pl "$d" ;;
+  amd-power)
+    isint "$arg" && (( arg >= 10 && arg <= 600 )) || exit 2
+    dev="$(amd_dev)" && h="$(amd_hw "$dev")" || exit 3
+    echo $(( arg * 1000000 )) > "$h/power1_cap" ;;
+  amd-power-default)
+    dev="$(amd_dev)" && h="$(amd_hw "$dev")" || exit 3
+    cat "$h/power1_cap_default" > "$h/power1_cap" ;;
+  amd-clock)
+    isint "$arg" && (( arg >= 200 && arg <= 4000 )) || exit 2
+    dev="$(amd_dev)" || exit 3
+    echo manual > "$dev/power_dpm_force_performance_level" && \
+    echo "s 1 $arg" > "$dev/pp_od_clk_voltage" && echo c > "$dev/pp_od_clk_voltage" ;;
+  amd-reset)
+    dev="$(amd_dev)" || exit 3
+    echo r > "$dev/pp_od_clk_voltage" 2>/dev/null; echo c > "$dev/pp_od_clk_voltage" 2>/dev/null
+    echo high > "$dev/power_dpm_force_performance_level" ;;
+  *) echo "uso: hkos-gpu-root nv-power|nv-lock|nv-unlock|nv-power-default|amd-power|amd-power-default|amd-clock|amd-reset [N]" >&2; exit 1 ;;
+esac
+TOOL_EOF
+
+put 755 usr/local/bin/hkos-gpu <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-gpu - energia, clock e overclock da placa de vídeo (NVIDIA completo, AMD: energia e clock máximo)
+# Sem argumentos abre o menu. Overclock pode travar o jogo ou o PC: aumente aos poucos.
+DRM="${HKOS_DRM:-/sys/class/drm}"
+R="${HKOS_GPU_ROOT:-/usr/local/bin/hkos-gpu-root}"
+ROOT=("$R"); [[ $EUID -eq 0 ]] || ROOT=(sudo "$R")
+CONF="${HKOS_GPU_CONF:-$HOME/.config/hkos-gpu.conf}"
+PEND="${CONF%.conf}.pending"
+
+vendor() {
+  if grep -qs 0x10de "$DRM"/card*/device/vendor; then echo nvidia
+  elif grep -qs 0x1002 "$DRM"/card*/device/vendor; then echo amd
+  else echo none; fi
+}
+nvq() { nvidia-smi --query-gpu="$1" --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' '; }
+int() { local v="${1%.*}"; [[ "$v" =~ ^[0-9]+$ ]] && echo "$v"; }
+amd_dev() { local c; for c in "$DRM"/card*/device; do grep -qs 0x1002 "$c/vendor" && { echo "$c"; return 0; }; done; return 1; }
+amd_hw() { ls -d "$(amd_dev)"/hwmon/hwmon* 2>/dev/null | head -1; }
+
+cget() { [[ -f "$CONF" ]] && grep -m1 "^$1=" "$CONF" | cut -d= -f2 | tr -cd '0-9-'; }
+cset() { # cset CHAVE VALOR (vazio apaga)
+  mkdir -p "$(dirname "$CONF")"; touch "$CONF"
+  sed -i "/^$1=/d" "$CONF"; [[ -n "${2:-}" ]] && echo "$1=$2" >> "$CONF"; return 0
+}
+
+# ---------- limites ----------
+pw_min()  { case "$(vendor)" in nvidia) int "$(nvq power.min_limit)" ;; amd) echo $(( $(cat "$(amd_hw)/power1_cap_min") / 1000000 )) ;; esac; }
+pw_max()  { case "$(vendor)" in nvidia) int "$(nvq power.max_limit)" ;; amd) echo $(( $(cat "$(amd_hw)/power1_cap_max") / 1000000 )) ;; esac; }
+pw_def()  { case "$(vendor)" in nvidia) int "$(nvq power.default_limit)" ;; amd) echo $(( $(cat "$(amd_hw)/power1_cap_default") / 1000000 )) ;; esac; }
+clk_max() { case "$(vendor)" in nvidia) int "$(nvq clocks.max.gr)" ;; esac; }
+
+# ---------- ações ----------
+set_power() {
+  local w="$1" lo hi
+  [[ "$w" =~ ^[0-9]+$ ]] || { echo "Digite um número em watts."; return 1; }
+  lo="$(pw_min)"; hi="$(pw_max)"
+  if [[ -n "$lo" && -n "$hi" ]] && (( w < lo || w > hi )); then echo "Esta placa aceita de $lo a $hi W."; return 1; fi
+  case "$(vendor)" in
+    nvidia) "${ROOT[@]}" nv-power "$w" >/dev/null ;;
+    amd)    "${ROOT[@]}" amd-power "$w" ;;
+    *) echo "Nenhuma GPU NVIDIA ou AMD encontrada."; return 1 ;;
+  esac || { echo "Não consegui definir a energia."; return 1; }
+  cset POWER "$w"
+}
+set_clock() { # MHz | off
+  local m="$1"
+  if [[ "$m" == off ]]; then
+    case "$(vendor)" in nvidia) "${ROOT[@]}" nv-unlock >/dev/null ;; amd) "${ROOT[@]}" amd-reset ;; *) return 1 ;; esac || return 1
+    cset CLOCK ""; return 0
+  fi
+  [[ "$m" =~ ^[0-9]+$ ]] || { echo "Digite um número em MHz."; return 1; }
+  case "$(vendor)" in
+    nvidia) "${ROOT[@]}" nv-lock "$m" >/dev/null ;;
+    amd)    "${ROOT[@]}" amd-clock "$m" ;;
+    *) echo "Nenhuma GPU NVIDIA ou AMD encontrada."; return 1 ;;
+  esac || { echo "Não consegui limitar o clock."; return 1; }
+  cset CLOCK "$m"
+}
+set_offset() { # core|mem N  (só NVIDIA, precisa do X e do Coolbits)
+  local kind="$1" n="$2" a1 a2
+  [[ "$(vendor)" == nvidia ]] || { echo "Offset de clock só existe aqui para NVIDIA."; return 1; }
+  [[ "$n" =~ ^-?[0-9]+$ ]] || { echo "Digite um número (MHz, pode ser negativo)."; return 1; }
+  if [[ "$kind" == core ]]; then
+    (( n >= -300 && n <= 300 )) || { echo "Núcleo: use de -300 a 300."; return 1; }
+    a1="GPUGraphicsClockOffsetAllPerformanceLevels"; a2="GPUGraphicsClockOffset[3]"
+  else
+    (( n >= -1000 && n <= 1500 )) || { echo "Memória: use de -1000 a 1500."; return 1; }
+    a1="GPUMemoryTransferRateOffsetAllPerformanceLevels"; a2="GPUMemoryTransferRateOffset[3]"
+  fi
+  command -v nvidia-settings >/dev/null || { echo "nvidia-settings ausente."; return 1; }
+  nvidia-settings -a "[gpu:0]/$a1=$n" >/dev/null 2>&1 || nvidia-settings -a "[gpu:0]/$a2=$n" >/dev/null 2>&1 \
+    || { echo "Falhou. Precisa de X11 e Coolbits (reinicie o desktop após atualizar o HKOS)."; return 1; }
+  cset "$( [[ $kind == core ]] && echo CORE || echo MEM )" "$n"
+}
+reset_hw() {
+  case "$(vendor)" in
+    nvidia) "${ROOT[@]}" nv-power-default >/dev/null 2>&1; "${ROOT[@]}" nv-unlock >/dev/null 2>&1
+            nvidia-settings -a "[gpu:0]/GPUGraphicsClockOffsetAllPerformanceLevels=0" \
+                            -a "[gpu:0]/GPUMemoryTransferRateOffsetAllPerformanceLevels=0" >/dev/null 2>&1 || true ;;
+    amd)    "${ROOT[@]}" amd-power-default 2>/dev/null; "${ROOT[@]}" amd-reset 2>/dev/null ;;
+  esac
+  return 0
+}
+profile() { # padrao | desempenho | eficiente
+  local d hi mc
+  case "$1" in
+    padrao)     reset_hw; rm -f "$CONF"; return 0 ;;
+    desempenho) hi="$(pw_max)"; reset_hw; rm -f "$CONF"
+                [[ -n "$hi" ]] && set_power "$hi"
+                if [[ "$(vendor)" == nvidia ]]; then set_offset core 50; set_offset mem 300; fi ;;
+    eficiente)  d="$(pw_def)"; mc="$(clk_max)"; reset_hw; rm -f "$CONF"
+                [[ -n "$d" ]] && set_power $(( d * 80 / 100 ))
+                [[ -n "$mc" ]] && set_clock $(( mc * 85 / 100 )) ;;
+    *) echo "perfil: padrao | desempenho | eficiente"; return 1 ;;
+  esac
+}
+apply_conf() {
+  local v
+  v="$(cget POWER)";  [[ -n "$v" ]] && set_power "$v"
+  v="$(cget CLOCK)";  [[ -n "$v" ]] && set_clock "$v"
+  v="$(cget CORE)";   [[ -n "$v" ]] && set_offset core "$v"
+  v="$(cget MEM)";    [[ -n "$v" ]] && set_offset mem "$v"
+  return 0
+}
+boot() { # chamado no login. Se o PC travou nos 2 primeiros minutos da última vez, não aplica de novo.
+  [[ "$(cget BOOT)" == 1 ]] || return 0
+  if [[ -f "$PEND" ]]; then
+    rm -f "$PEND"; cset BOOT 0; reset_hw
+    command -v notify-send >/dev/null && notify-send "HKOS GPU" "O perfil anterior não terminou bem e foi desligado. Reative em hkos-gpu."
+    return 0
+  fi
+  touch "$PEND"; apply_conf; sleep "${HKOS_GPU_GUARD:-120}"; rm -f "$PEND"
+}
+
+status() {
+  case "$(vendor)" in
+    nvidia) nvidia-smi --query-gpu=name,temperature.gpu,power.draw,power.limit,clocks.gr,clocks.max.gr,clocks.mem,utilization.gpu \
+              --format=csv,noheader 2>/dev/null | awk -F', ' '{printf "Placa: %s\nTemperatura: %s C\nEnergia: %s (limite %s)\nClock núcleo: %s (máx %s)\nClock memória: %s\nUso: %s\n", $1,$2,$3,$4,$5,$6,$7,$8}'
+            echo "Ajustes salvos: energia=$(cget POWER) clock=$(cget CLOCK) núcleo=$(cget CORE) memória=$(cget MEM) ao-ligar=$(cget BOOT)" ;;
+    amd)    local h; h="$(amd_hw)"
+            echo "Placa AMD"; [[ -n "$h" ]] && echo "Temperatura: $(( $(cat "$h/temp1_input") / 1000 )) C" && echo "Limite de energia: $(( $(cat "$h/power1_cap") / 1000000 )) W"
+            echo "Ajustes salvos: energia=$(cget POWER) clock=$(cget CLOCK) ao-ligar=$(cget BOOT)" ;;
+    *) echo "Nenhuma GPU NVIDIA ou AMD encontrada." ;;
+  esac
+}
+
+menu() {
+  command -v dialog >/dev/null || { echo "dialog ausente"; exit 1; }
+  local C V msg lo hi
+  while true; do
+    C="$(dialog --stdout --title "HKOS GPU ($(vendor))" --menu "Overclock pode travar o jogo ou o PC. Aumente aos poucos." 20 70 10 \
+      1 "Ver situação da placa" \
+      2 "Limite de energia (W)" \
+      3 "Limitar o clock máximo (MHz)" \
+      4 "Offset do clock do núcleo (NVIDIA)" \
+      5 "Offset do clock da memória (NVIDIA)" \
+      6 "Perfil Desempenho (energia máxima + overclock leve)" \
+      7 "Perfil Eficiente (menos calor e barulho)" \
+      8 "Perfil Padrão (volta tudo ao normal)" \
+      9 "Aplicar ao ligar (liga/desliga)" \
+      0 "Sair")" || exit 0
+    msg=""
+    case "$C" in
+      1) dialog --msgbox "$(status)" 14 70; continue ;;
+      2) lo="$(pw_min)"; hi="$(pw_max)"
+         V="$(dialog --stdout --inputbox "Limite de energia em watts (${lo:-?} a ${hi:-?}):" 8 60)" || continue
+         msg="$(set_power "$V" 2>&1)" && msg="Limite de energia: $V W." ;;
+      3) V="$(dialog --stdout --inputbox "Clock máximo em MHz (ou 'off' para soltar). Máx da placa: $(clk_max):" 9 62)" || continue
+         msg="$(set_clock "$V" 2>&1)" && msg="Clock máximo: $V." ;;
+      4) V="$(dialog --stdout --inputbox "Offset do núcleo em MHz (-300 a 300). Comece com 25:" 8 62)" || continue
+         msg="$(set_offset core "$V" 2>&1)" && msg="Offset do núcleo: $V MHz." ;;
+      5) V="$(dialog --stdout --inputbox "Offset da memória em MHz (-1000 a 1500). Comece com 100:" 8 62)" || continue
+         msg="$(set_offset mem "$V" 2>&1)" && msg="Offset da memória: $V MHz." ;;
+      6) dialog --yesno "Aumenta a energia ao máximo e dá um overclock leve (núcleo +50, memória +300 na NVIDIA). Pode esquentar mais. Continuar?" 9 60 || continue
+         msg="$(profile desempenho 2>&1)" && msg="Perfil Desempenho aplicado." ;;
+      7) msg="$(profile eficiente 2>&1)" && msg="Perfil Eficiente aplicado." ;;
+      8) msg="$(profile padrao 2>&1)" && msg="Tudo voltou ao padrão." ;;
+      9) if [[ "$(cget BOOT)" == 1 ]]; then cset BOOT ""; msg="Não vai mais aplicar ao ligar."
+         else cset BOOT 1; msg="Vai aplicar a cada login (só no HKOS instalado no disco). Se o PC travar nos 2 primeiros minutos, o perfil é desligado sozinho."; fi ;;
+      0) exit 0 ;;
+    esac
+    dialog --msgbox "${msg:-Feito.}" 9 66
+  done
+}
+
+case "${1:-}" in
+  status)  status ;;
+  power)   set_power "${2:-}" ;;
+  clock)   set_clock "${2:-}" ;;
+  core)    set_offset core "${2:-}" ;;
+  mem)     set_offset mem "${2:-}" ;;
+  profile) profile "${2:-}" ;;
+  save)    cset BOOT "${2:-1}" ;;
+  boot)    boot ;;
+  reset)   profile padrao ;;
+  *)       menu ;;
+esac
+TOOL_EOF
+
 put 755 usr/local/bin/hkos-run <<'TOOL_EOF'
 #!/usr/bin/env bash
 # hkos-run - "Executar" (tecla Windows + R): digite o nome do programa
@@ -479,6 +912,7 @@ tint2 &
 nm-applet &
 volumeicon &
 [ -f "$HOME/.config/hkos-fan-curve" ] && hkos-fan run &
+[ -f "$HOME/.config/hkos-gpu.conf" ] && hkos-gpu boot &
 # NVIDIA: PowerMizer em "preferir máximo desempenho" (ignorado em outras placas)
 if command -v nvidia-settings >/dev/null 2>&1 && [ -e /dev/nvidiactl ]; then
   nvidia-settings -a "[gpu:0]/GpuPowerMizerMode=1" >/dev/null 2>&1 &
@@ -500,6 +934,7 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <item label="Modo console (Steam em tela cheia)"><action name="Execute"><command>hkos-mode console</command></action></item>
   <item label="Ajustes HKOS"><action name="Execute"><command>xterm -e sudo hkos-tweaks</command></action></item>
   <item label="Ventoinha da placa de vídeo"><action name="Execute"><command>xterm -e hkos-fan</command></action></item>
+  <item label="GPU: energia e overclock"><action name="Execute"><command>xterm -e hkos-gpu</command></action></item>
   <item label="Heroic (Epic, GOG, Amazon)"><action name="Execute"><command>hkos-heroic</command></action></item>
   <item label="Instalar Proton-GE"><action name="Execute"><command>xterm -e hkos-proton-ge</command></action></item>
   <item label="Loja (instalar programas e drivers)"><action name="Execute"><command>xterm -e hkos-loja</command></action></item>
@@ -689,13 +1124,20 @@ options snd_hda_intel power_save=0 power_save_controller=N
 options snd_ac97_codec power_save=0
 EOF
 put 644 etc/X11/xorg.conf.d/20-nvidia-coolbits.conf <<'EOF'
-# Libera o controle manual da ventoinha da NVIDIA (só casa com GPU NVIDIA)
+# Libera ventoinha (4) e overclock (8) da NVIDIA (só casa com GPU NVIDIA)
 Section "OutputClass"
     Identifier "hkos-nvidia-coolbits"
     MatchDriver "nvidia-drm"
     Driver "nvidia"
-    Option "Coolbits" "4"
+    Option "Coolbits" "12"
 EndSection
+EOF
+put 644 etc/udev/rules.d/62-hkos-cpu-latency.rules <<'EOF'
+# hkos-game --lowlat: permite segurar a CPU fora dos estados de sono profundo durante o jogo
+KERNEL=="cpu_dma_latency", MODE="0666"
+EOF
+put 440 etc/sudoers.d/20-hkos-gpu <<'EOF'
+%wheel ALL=(root) NOPASSWD: /usr/local/bin/hkos-gpu-root, /usr/local/bin/hkos-game-root
 EOF
 put 644 etc/default/scx <<'EOF'
 # Agendador sched_ext (como CachyOS/Bazzite): LAVD, feito para jogos e baixa latência
@@ -862,6 +1304,8 @@ SHIPPED=(
   etc/vconsole.conf
   etc/X11/xorg.conf.d/00-keyboard.conf
   etc/X11/xorg.conf.d/20-nvidia-coolbits.conf
+  etc/sudoers.d/20-hkos-gpu
+  etc/udev/rules.d/62-hkos-cpu-latency.rules
   etc/X11/xorg.conf.d/30-hkos-mouse.conf
   etc/os-release etc/motd
   usr/share/applications/hkos-explorer.desktop
@@ -1193,6 +1637,9 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   hkos-ajuda ........... esta tela
   sudo hkos-tweaks ..... perfil de desempenho, agendador, mitigacoes
   hkos-fan ............. ventoinha da placa de video
+  hkos-gpu ............. energia, clock e overclock da placa de video
+  hkos-game ............ roda o jogo com ajustes de FPS/latencia (Steam: hkos-game %command%)
+  hkos-bench ........... mede FPS medio, 1% low e 0,1% low (hkos-bench -t 120 %command%)
   hkos-info ............ relatorio do sistema (salva ~/hkos-info.txt)
   hkos-proton-ge ....... baixa o Proton-GE para o Steam
   hkos-heroic .......... instala e abre o Heroic (Epic, GOG, Amazon)
@@ -1235,6 +1682,19 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   Icone de rede na barra de baixo tambem funciona.
 
 6) JOGOS
+  Opcoes de inicializacao do Steam (copie e cole):
+    hkos-game %command% ........................... GameMode + perfil do jogo
+    hkos-game --novsync --lowlat %command% ......... mais FPS e menos atraso
+    hkos-game --fps 144 --reserve 2 %command% ...... FPS estavel e 2 nucleos livres
+    hkos-game --sched bpfland --x3d %command% ...... agendador/V-Cache so no jogo
+    hkos-game save APPID --novsync --lowlat ........ salva para aquele jogo
+    hkos-bench -n antes -t 120 %command% ........... mede o FPS (depois: hkos-bench compare)
+    Mais opcoes: hkos-game help
+  GPU (hkos-gpu): limite de energia, clock maximo e overclock (NVIDIA:
+    nucleo e memoria; AMD: energia e clock maximo). Comece com offset 25 no
+    nucleo e 100 na memoria e teste um jogo antes de subir. NVIDIA nao tem
+    controle de voltagem no Linux: "eficiente" limita energia e clock.
+    "Aplicar ao ligar" so vale no HKOS instalado no disco.
   Steam: nas propriedades do jogo > Opcoes de inicializacao:
     mangohud %command% ................ mostra FPS e temperatura
     gamemoderun %command% ............. prioridade maxima (GameMode)
@@ -1563,7 +2023,7 @@ echo "==> Aplicando ajustes do HKOS"
 while read -r f; do
   [[ -n "$f" ]] && install -D -m 0644 "/$f" "/mnt/$f"
 done < /usr/share/gameos/files.txt
-for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja; do
+for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja; do
   install -D -m 0755 "/usr/local/bin/$s" "/mnt/usr/local/bin/$s"
 done
 install -d /mnt/usr/share/hkos
@@ -1592,6 +2052,8 @@ cp -rf /usr/share/hkos/skel/. "/home/$USERN/"
 chown -R "$USERN:$USERN" "/home/$USERN"
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
 chmod 440 /etc/sudoers.d/10-wheel
+echo '%wheel ALL=(root) NOPASSWD: /usr/local/bin/hkos-gpu-root, /usr/local/bin/hkos-game-root' > /etc/sudoers.d/20-hkos-gpu
+chmod 440 /etc/sudoers.d/20-hkos-gpu
 passwd -l root >/dev/null
 install -d /etc/systemd/system/getty@tty1.service.d
 cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf <<'AUTOLOGIN'
