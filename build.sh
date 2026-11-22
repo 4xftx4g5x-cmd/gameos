@@ -41,7 +41,7 @@ REMOVE=(
   sg3_utils sdparm lsscsi bind dnsmasq iwd reflector
   man-db man-pages vim
   archinstall refind grub                               # o HKOS tem instalador próprio (systemd-boot)
-  bcachefs-tools btrfs-progs f2fs-tools xfsprogs mdadm lvm2 mmc-utils bolt
+  bcachefs-tools btrfs-progs mdadm lvm2 mmc-utils bolt
   tpm2-tools tpm2-tss sequoia-sq openpgp-card-tools pcsclite libfido2
   lynx wireless_tools dhcpcd                           # (zsh fica: o root do releng usa zsh)
   foot-terminfo ghostty-terminfo kitty-terminfo kmscon-terminfo rxvt-unicode-terminfo
@@ -898,6 +898,10 @@ EOF
 put 755 $SK/.config/openbox/autostart <<'EOF'
 xsetroot -cursor_name left_ptr &
 WALL=/usr/share/wallpapers/HKOS/hkos.png
+ULTRA=0; [ -f "$HOME/.config/hkos-ultra" ] && ULTRA=1
+if [ "$ULTRA" = 1 ]; then
+  xsetroot -solid '#000000' &
+else
 # Ícones na área de trabalho (Este computador, Lixeira...). Para desligar: touch ~/.config/hkos-no-desktop-icons
 if [ -f "$WALL" ] && command -v pcmanfm >/dev/null 2>&1 && [ ! -f "$HOME/.config/hkos-no-desktop-icons" ]; then
   hkos-explorer --desktop &
@@ -911,12 +915,15 @@ dunst &
 tint2 &
 nm-applet &
 volumeicon &
+fi
 [ -f "$HOME/.config/hkos-fan-curve" ] && hkos-fan run &
 [ -f "$HOME/.config/hkos-gpu.conf" ] && hkos-gpu boot &
 # NVIDIA: PowerMizer em "preferir máximo desempenho" (ignorado em outras placas)
 if command -v nvidia-settings >/dev/null 2>&1 && [ -e /dev/nvidiactl ]; then
   nvidia-settings -a "[gpu:0]/GpuPowerMizerMode=1" >/dev/null 2>&1 &
 fi
+# Modo ultraleve: só o Steam em tela cheia (Big Picture)
+[ "$ULTRA" = 1 ] && steam -gamepadui >/dev/null 2>&1 &
 EOF
 put 644 $SK/.config/openbox/menu.xml <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -932,6 +939,7 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <item label="Volume"><action name="Execute"><command>pavucontrol</command></action></item>
   <separator/>
   <item label="Modo console (Steam em tela cheia)"><action name="Execute"><command>hkos-mode console</command></action></item>
+  <item label="Modo ultraleve (só o Steam)"><action name="Execute"><command>hkos-mode ultra</command></action></item>
   <item label="Ajustes HKOS"><action name="Execute"><command>xterm -e sudo hkos-tweaks</command></action></item>
   <item label="Ventoinha da placa de vídeo"><action name="Execute"><command>xterm -e hkos-fan</command></action></item>
   <item label="GPU: energia e overclock"><action name="Execute"><command>xterm -e hkos-gpu</command></action></item>
@@ -1324,15 +1332,20 @@ cp "$HERE/packages.extra" "$AIROOT/usr/share/gameos/packages.txt"
 ###############################################################################
 put 755 usr/local/bin/hkos-mode <<'TOOL_EOF'
 #!/usr/bin/env bash
-# hkos-mode console | console-always | desktop
+# hkos-mode console | console-always | ultra | desktop
 # console: abre o Steam em tela cheia (Gamescope, sem desktop) no próximo login.
+# ultra:   só o Steam em tela cheia: sem ícones, barra, notificações e bandeja (o mais leve).
 F="$HOME/.config/hkos-console"
+U="$HOME/.config/hkos-ultra"
 mkdir -p "$(dirname "$F")"
 case "${1:-}" in
   console)        echo once > "$F" ;;
   console-always) echo always > "$F" ;;
-  desktop)        rm -f "$F"; echo "Modo desktop ativado."; exit 0 ;;
-  *) echo "uso: hkos-mode console | console-always | desktop"; exit 1 ;;
+  ultra)          touch "$U"; echo "Modo ultraleve ativado. Saindo do desktop..."
+                  [[ -n "${DISPLAY:-}" ]] && openbox --exit; exit 0 ;;
+  desktop)        was=0; [[ -f "$U" ]] && was=1; rm -f "$F" "$U"; echo "Modo desktop ativado."
+                  (( was )) && [[ -n "${DISPLAY:-}" ]] && openbox --exit; exit 0 ;;
+  *) echo "uso: hkos-mode console | console-always | ultra | desktop"; exit 1 ;;
 esac
 command -v gamescope >/dev/null || echo "Aviso: o Gamescope não está instalado (hkos-loja). Sem ele o login abre o desktop normal."
 echo "Modo console ativado. Saindo do desktop..."
@@ -1502,6 +1515,7 @@ echo "-- Módulos";  lsmod | grep -E 'nvidia|ntsync|amdgpu|i915|xe|nouveau' || e
 echo "ntsync: $(ls /dev/ntsync 2>&1)"
 echo "-- Agendador"; echo "scx.service: $(systemctl is-active scx.service 2>&1)"; cat /sys/kernel/sched_ext/state 2>/dev/null || true
 echo "-- Memória";  free -h; zramctl 2>/dev/null || true
+echo "-- Tempo de boot"; systemd-analyze 2>/dev/null; systemd-analyze blame 2>/dev/null | head -12
 echo "-- Serviços com falha"; systemctl --failed --no-legend
 echo "-- Erros do boot"; journalctl -b -p 3 --no-pager 2>/dev/null | tail -40
 echo "-- startx.log"; tail -20 "$HOME/.startx.log" 2>/dev/null
@@ -1645,8 +1659,10 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   hkos-heroic .......... instala e abre o Heroic (Epic, GOG, Amazon)
   hkos-explorer ........ explorador de arquivos (atalho: tecla Windows + E)
   hkos-mode console .... Steam em tela cheia no proximo login
+  hkos-mode ultra ...... so o Steam em tela cheia (sem barra, icones e avisos)
   hkos-mode desktop .... volta ao modo desktop
-  sudo hkos-install .... instalar o HKOS no disco (APAGA o disco)
+  sudo hkos-install .... instalar o HKOS no disco (APAGA o disco). Pergunta o sistema
+                         de arquivos, o firmware e os programas extras.
 
 3) INSTALAR, PESQUISAR E REMOVER PROGRAMAS (pacman)
   sudo pacman -Syu .................. atualizar o sistema inteiro
@@ -1961,8 +1977,52 @@ TOOL_EOF
 put 755 usr/local/bin/hkos-install <<'INSTALLER_EOF'
 #!/usr/bin/env bash
 # HKOS - instalador automático (UEFI). Apaga o disco escolhido por inteiro.
-# Para dual boot ou particionamento manual, use o comando "archinstall".
+# Dual boot e particionamento manual não são suportados por este instalador.
 set -euo pipefail
+
+# ---- funções (testáveis: HKOS_INSTALL_SOURCE=1 source hkos-install) ----
+extra_pkgs() { # opção da lista -> pacotes
+  case "$1" in
+    bluetooth) echo "bluez bluez-utils blueman" ;;
+    wifi_bcm)  echo "broadcom-wl-dkms" ;;
+    sensors)   echo "lm_sensors" ;;
+    nvtop)     echo "nvtop" ;;
+    mpv)       echo "mpv" ;;
+    vlc)       echo "vlc" ;;
+    obs)       echo "obs-studio" ;;
+    torrent)   echo "qbittorrent" ;;
+    fetch)     echo "fastfetch" ;;
+    archivers) echo "p7zip unzip unrar" ;;
+    gamescope) echo "gamescope" ;;
+    battlenet) echo "lutris wine-staging winetricks wine-mono wine-gecko" ;;
+  esac
+}
+fw_detect() { # imprime os pacotes linux-firmware-* do hardware; falha se não der para reduzir com segurança
+  command -v lspci >/dev/null 2>&1 || return 1
+  local all pci f usbw=0 pk
+  all="$(lspci -n 2>/dev/null)"
+  # só reduz se a placa de vídeo for NVIDIA, AMD ou Intel; qualquer outra coisa: firmware completo
+  awk '$2 ~ /^03[0-9a-f][0-9a-f]:$/ {print $3}' <<<"$all" | cut -d: -f1 | tr 'A-F' 'a-f' | grep -qxE '10de|1002|8086' || return 1
+  pci="$(awk '{print $3}' <<<"$all" | cut -d: -f1 | tr 'A-F' 'a-f' | sort -u)"
+  for f in /sys/bus/usb/devices/*/bInterfaceClass; do
+    [[ -r "$f" && "$(cat "$f")" == e0 ]] && usbw=1            # Wi-Fi/Bluetooth USB: não dá para saber a marca
+  done
+  pk=(linux-firmware-whence linux-firmware-other linux-firmware-amd linux-firmware-cirrus linux-firmware-ti)
+  grep -qx 10de <<<"$pci" && pk+=(linux-firmware-nvidia)
+  grep -qx 1002 <<<"$pci" && pk+=(linux-firmware-amdgpu linux-firmware-radeon)
+  grep -qx 8086 <<<"$pci" && pk+=(linux-firmware-intel)
+  grep -qx 10ec <<<"$pci" && pk+=(linux-firmware-realtek)
+  grep -qx 14c3 <<<"$pci" && pk+=(linux-firmware-mediatek)
+  { grep -qx 168c <<<"$pci" || grep -qx 17cb <<<"$pci"; } && pk+=(linux-firmware-atheros)
+  grep -qx 14e4 <<<"$pci" && pk+=(linux-firmware-broadcom)
+  (( usbw )) && pk+=(linux-firmware-realtek linux-firmware-mediatek linux-firmware-atheros linux-firmware-broadcom linux-firmware-intel)
+  printf '%s\n' "${pk[@]}" | sort -u
+  return 0
+}
+fw_check() { # todos os pacotes existem no repositório?
+  local p; for p in "$@"; do pacman -Si --config "$PC" "$p" >/dev/null 2>&1 || return 1; done
+}
+[[ "${HKOS_INSTALL_SOURCE:-0}" == 1 ]] && return 0
 [[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
 command -v dialog >/dev/null || { echo "dialog não encontrado."; exit 1; }
 if [[ ! -d /sys/firmware/efi ]]; then
@@ -1994,6 +2054,30 @@ USERN="$(dialog --stdout --inputbox "Nome do usuário (minúsculas, sem espaço)
 PASS1="$(dialog --stdout --insecure --passwordbox "Senha do usuário $USERN:" 8 50)" || exit 0
 PASS2="$(dialog --stdout --insecure --passwordbox "Repita a senha:" 8 50)" || exit 0
 [[ -n "$PASS1" && "$PASS1" == "$PASS2" ]] || { echo "Senhas vazias ou diferentes." >&2; exit 1; }
+
+FSTYPE="$(dialog --stdout --title "Sistema de arquivos" --menu "Onde ficam o sistema e os jogos:" 13 76 3 \
+  ext4 "Padrão, o mais testado (recomendado)" \
+  xfs  "Rápido com arquivos grandes (jogos)" \
+  f2fs "Pensado para SSD/NVMe")" || exit 0
+FWMODE="$(dialog --stdout --title "Firmware" --menu "Firmware são os arquivos que fazem a placa de vídeo, o Wi-Fi e a rede funcionarem:" 13 76 2 \
+  detect "Só o do meu hardware (instalação menor)" \
+  full   "Completo (mais seguro, ocupa mais espaço)")" || exit 0
+SEL="$(dialog --stdout --separate-output --title "Programas extras (opcional)" \
+  --checklist "Marque com Espaço o que quiser já instalado. Dá para instalar depois pelo hkos-loja." 22 76 12 \
+  battlenet "Battle.net (Lutris + Wine, ~1,5 GB)" off \
+  gamescope "Gamescope (modo console)" off \
+  bluetooth "Bluetooth" off \
+  obs       "OBS Studio (gravar e transmitir)" off \
+  vlc       "VLC" off \
+  mpv       "mpv (player leve)" off \
+  torrent   "qBittorrent" off \
+  nvtop     "nvtop (monitor da GPU)" off \
+  sensors   "Sensores de temperatura" off \
+  fetch     "fastfetch" off \
+  archivers "Zip, 7z e RAR" off \
+  wifi_bcm  "Wi-Fi Broadcom" off)" || SEL=""
+ULTRA=0
+dialog --title "Modo ultraleve" --defaultno --yesno "Iniciar direto no Steam em tela cheia, sem ícones, barra e notificações?\n(Dá para mudar depois: hkos-mode ultra / hkos-mode desktop)" 9 66 && ULTRA=1
 clear
 
 # --- 2) Particiona: ESP 1 GiB + raiz ext4 ---
@@ -2006,7 +2090,12 @@ sgdisk --zap-all "$DISK" >/dev/null
 sgdisk -n1:0:+1GiB -t1:ef00 -c1:HKOS-ESP -n2:0:0 -t2:8300 -c2:HKOS-ROOT "$DISK" >/dev/null
 partprobe "$DISK"; udevadm settle; sleep 2
 mkfs.fat -F32 -n HKOS-ESP "$EFI" >/dev/null
-mkfs.ext4 -F -q -L HKOS "$ROOT"
+FSPKG=()
+case "$FSTYPE" in
+  xfs)  mkfs.xfs -f -q -L HKOS "$ROOT"; FSPKG=(xfsprogs) ;;
+  f2fs) mkfs.f2fs -f -l HKOS "$ROOT" >/dev/null; FSPKG=(f2fs-tools) ;;
+  *)    mkfs.ext4 -F -q -L HKOS "$ROOT" ;;
+esac
 mount "$ROOT" /mnt
 mkdir -p /mnt/boot
 mount "$EFI" /mnt/boot
@@ -2017,7 +2106,31 @@ PC="$(mktemp)"; cp /etc/pacman.conf "$PC"
 sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' "$PC"
 sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 10/' "$PC"
 mapfile -t PKGS < <(grep -vE '^\s*(#|$)' /usr/share/gameos/packages.txt | grep -vx 'archinstall')
-pacstrap -C "$PC" -K /mnt base mkinitcpio dialog earlyoom pciutils "${PKGS[@]}"
+
+# microcode só do fabricante da CPU
+case "$(grep -m1 -o 'GenuineIntel\|AuthenticAMD' /proc/cpuinfo || true)" in
+  GenuineIntel) mapfile -t PKGS < <(printf '%s\n' "${PKGS[@]}" | grep -vx 'amd-ucode' || true) ;;
+  AuthenticAMD) mapfile -t PKGS < <(printf '%s\n' "${PKGS[@]}" | grep -vx 'intel-ucode' || true) ;;
+esac
+# firmware: só o do hardware detectado (ou completo se não der para reduzir com segurança)
+if [[ "$FWMODE" == detect ]]; then
+  pacman -Sy --noconfirm --config "$PC" >/dev/null 2>&1 || true
+  mapfile -t FW < <(fw_detect || true)
+  if (( ${#FW[@]} > 0 )) && fw_check "${FW[@]}"; then
+    echo "==> Firmware só do seu hardware: ${FW[*]}"
+    mapfile -t PKGS < <(printf '%s\n' "${PKGS[@]}" | grep -vx 'linux-firmware' || true)
+    PKGS+=("${FW[@]}")
+  else
+    echo "==> Firmware completo (não consegui reduzir com segurança)"
+  fi
+fi
+# programas extras escolhidos
+EXTRA=(); SERV=""
+for o in $SEL; do
+  for p in $(extra_pkgs "$o"); do EXTRA+=("$p"); done
+  if [[ "$o" == bluetooth ]]; then SERV="bluetooth"; fi
+done
+pacstrap -C "$PC" -K /mnt base mkinitcpio lz4 dialog earlyoom pciutils "${PKGS[@]}" "${FSPKG[@]}" "${EXTRA[@]}"
 
 echo "==> Aplicando ajustes do HKOS"
 while read -r f; do
@@ -2031,6 +2144,7 @@ cp -a /usr/share/hkos/skel /mnt/usr/share/hkos/
 sed -i '/hkos-install/d' /mnt/usr/share/hkos/skel/.config/openbox/menu.xml
 genfstab -U /mnt >> /mnt/etc/fstab
 sed -i 's/\brelatime\b/noatime/g' /mnt/etc/fstab
+echo 'tmpfs /tmp tmpfs defaults,noatime,mode=1777,size=50% 0 0' >> /mnt/etc/fstab
 
 # --- 4) Configura dentro do sistema novo ---
 CMD='quiet loglevel=3 mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1 iommu=pt workqueue.power_efficient=0 cpufreq.default_governor=performance amd_pstate=active usbhid.mousepoll=1 i915.enable_psr=0'
@@ -2038,7 +2152,7 @@ ROOT_UUID="$(blkid -s UUID -o value "$ROOT")"
 cat > /mnt/root/hkos-setup.sh <<'SETUP_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-HOSTN="$1"; USERN="$2"
+HOSTN="$1"; USERN="$2"; EXTRAS="${3:-}"; ULTRA="${4:-0}"
 ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
 hwclock --systohc || true
 sed -i -e 's/^#\(en_US.UTF-8\)/\1/' -e 's/^#\(pt_BR.UTF-8\)/\1/' /etc/locale.gen
@@ -2050,6 +2164,10 @@ getent group gamemode >/dev/null && GROUPS_LIST="$GROUPS_LIST,gamemode"
 useradd -m -G "$GROUPS_LIST" -s /bin/bash "$USERN"
 cp -rf /usr/share/hkos/skel/. "/home/$USERN/"
 chown -R "$USERN:$USERN" "/home/$USERN"
+if [[ "$ULTRA" == 1 ]]; then
+  install -d -o "$USERN" -g "$USERN" "/home/$USERN/.config"
+  touch "/home/$USERN/.config/hkos-ultra"; chown "$USERN:$USERN" "/home/$USERN/.config/hkos-ultra"
+fi
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
 chmod 440 /etc/sudoers.d/10-wheel
 echo '%wheel ALL=(root) NOPASSWD: /usr/local/bin/hkos-gpu-root, /usr/local/bin/hkos-game-root' > /etc/sudoers.d/20-hkos-gpu
@@ -2062,17 +2180,28 @@ ExecStart=
 ExecStart=-/sbin/agetty -o '-p -f -- \\u' --noclear --autologin HKOS_USER %I $TERM
 AUTOLOGIN
 sed -i "s/HKOS_USER/$USERN/" /etc/systemd/system/getty@tty1.service.d/autologin.conf
+# initramfs enxuto e rápido: só o necessário, compressão lz4, sem imagem de fallback
+install -d /etc/mkinitcpio.conf.d
+cat > /etc/mkinitcpio.conf.d/hkos.conf <<'MKCONF'
+HOOKS=(base udev autodetect modconf block filesystems fsck)
+COMPRESSION="lz4"
+MKCONF
+if [[ -f /etc/mkinitcpio.d/linux-zen.preset ]]; then
+  sed -i "s/^PRESETS=.*/PRESETS=('default')/" /etc/mkinitcpio.d/linux-zen.preset
+fi
 mkinitcpio -P
+rm -f /boot/initramfs-linux-zen-fallback.img
 systemctl enable NetworkManager.service fstrim.timer earlyoom.service systemd-timesyncd.service
 systemctl enable scx.service || true
 systemctl enable nvidia-persistenced.service || true
 systemctl enable systemd-boot-update.service || true
 systemctl disable NetworkManager-wait-online.service || true
+if [[ "$EXTRAS" == *bluetooth* ]]; then systemctl enable bluetooth.service || true; fi
 systemctl mask man-db.timer shadow.timer archlinux-keyring-wkd-sync.timer || true
 SETUP_EOF
 chmod 755 /mnt/root/hkos-setup.sh
 echo "$USERN:$PASS1" > /mnt/root/.hkos-pw
-arch-chroot /mnt /root/hkos-setup.sh "$HOSTN" "$USERN"
+arch-chroot /mnt /root/hkos-setup.sh "$HOSTN" "$USERN" "$SERV" "$ULTRA"
 arch-chroot /mnt bash -c 'chpasswd < /root/.hkos-pw'
 shred -u /mnt/root/.hkos-pw; rm -f /mnt/root/hkos-setup.sh
 
@@ -2081,7 +2210,7 @@ echo "==> Instalando o bootloader"
 bootctl --esp-path=/mnt/boot install
 cat > /mnt/boot/loader/loader.conf <<'EOF'
 default hkos.conf
-timeout 1
+timeout 0
 console-mode max
 editor no
 EOF
