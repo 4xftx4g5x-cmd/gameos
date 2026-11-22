@@ -58,25 +58,108 @@ sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 10/' "$PROFILE/pacman.conf
 grep -q '^ParallelDownloads' "$PROFILE/pacman.conf" || sed -i '/^\[options\]/a ParallelDownloads = 10' "$PROFILE/pacman.conf"
 
 ###############################################################################
-# 2) KERNEL ZEN: preset do initramfs, entradas de boot, nome e parâmetros
+# 1b) KERNEL PRÓPRIO linux-hkos (opcional; se falhar, cai no linux-zen)
+#     HKOS_KERNEL=0 desliga | KCACHE=<pasta> reaproveita o kernel já compilado
+#     HKOS_KFLAGS="-march=x86-64-v3" liga o ajuste p/ CPUs com AVX2 (opcional)
+###############################################################################
+KERNEL=linux-zen
+KREPO="$WORK/hkosrepo"
+if [[ "${HKOS_KERNEL:-1}" == 1 ]]; then
+  if [[ "${DRYRUN:-0}" == 1 ]]; then
+    KERNEL=linux-hkos                       # simulação: só testa a troca de nomes
+  else
+    mkdir -p "$KREPO"
+    cat > "$WORK/kbuild.sh" <<'KBUILD_EOF'
+#!/usr/bin/env bash
+# Compila o linux-hkos a partir do PKGBUILD oficial do linux-zen (Arch).
+set -euo pipefail
+REPO="$1"; KCACHE="${KCACHE:-}"
+if [[ -n "$KCACHE" ]] && compgen -G "$KCACHE/linux-hkos-headers-*.pkg.tar.zst" >/dev/null; then
+  echo "==> kernel linux-hkos já compilado (cache), reaproveitando"
+  cp "$KCACHE"/linux-hkos-*.pkg.tar.zst "$REPO/"
+  exit 0
+fi
+pacman -S --needed --noconfirm base-devel git bc cpio gettext libelf pahole perl python tar xz zstd
+id builder >/dev/null 2>&1 || useradd -m builder
+B=/home/builder/k
+rm -rf "$B"; mkdir -p "$B/out"
+git clone --depth 1 https://gitlab.archlinux.org/archlinux/packaging/packages/linux-zen.git "$B/src"
+cd "$B/src"
+python - <<'PY'
+import re
+s = open('PKGBUILD').read()
+def sub(pat, new, flags=re.M):
+    global s
+    s, n = re.subn(pat, new, s, count=1, flags=flags)
+    assert n == 1, pat
+sub(r'^pkgbase=linux-zen\s*$', 'pkgbase=linux-hkos')
+sub(r'^pkgname=\(.*\)\s*$', 'pkgname=("$pkgbase" "$pkgbase-headers")')
+sub(r'^makedepends=\([^)]*\)', 'makedepends=(bc cpio gettext libelf pahole perl python tar xz zstd)')
+s = re.sub(r'^.*make .*htmldocs.*\n', '', s, flags=re.M)      # sem documentação
+open('PKGBUILD', 'w').write(s)
+PY
+[[ -f config.x86_64 ]] || { echo "config.x86_64 não encontrado"; exit 1; }
+cat >> config.x86_64 <<'CFG'
+
+# --- ajustes HKOS (jogos / baixa latência) ---
+CONFIG_HZ_1000=y
+CONFIG_HZ=1000
+CONFIG_PREEMPT=y
+CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=y
+CONFIG_NTSYNC=y
+CONFIG_TCP_CONG_BBR=y
+CONFIG_DEFAULT_BBR=y
+CONFIG_DEFAULT_TCP_CONG="bbr"
+# CONFIG_SLUB_DEBUG is not set
+# CONFIG_DEBUG_PREEMPT is not set
+# CONFIG_PROFILING is not set
+CFG
+chown -R builder "$B"
+NP="$(nproc)"
+su builder -c "cd '$B/src' && MAKEFLAGS='-j$NP' KCFLAGS='${HKOS_KFLAGS:--pipe}' PKGDEST='$B/out' timeout 170m makepkg --nodeps --skipinteg --noconfirm --nocheck"
+ls "$B"/out/linux-hkos-headers-*.pkg.tar.zst >/dev/null
+for f in "$B"/out/linux-hkos-*.pkg.tar.zst; do
+  case "$f" in *-docs-*|*-debug-*) continue;; esac
+  cp "$f" "$REPO/"
+  [[ -n "$KCACHE" ]] && { mkdir -p "$KCACHE"; cp "$f" "$KCACHE/"; }
+done
+echo "==> kernel linux-hkos pronto"
+KBUILD_EOF
+    # roda em processo separado: se qualquer coisa falhar, o HKOS segue com o linux-zen
+    if bash "$WORK/kbuild.sh" "$KREPO" && ls "$KREPO"/linux-hkos-headers-*.pkg.tar.zst >/dev/null 2>&1; then
+      repo-add "$KREPO/hkos.db.tar.zst" "$KREPO"/linux-hkos-*.pkg.tar.zst
+      printf '\n[hkos]\nSigLevel = Optional TrustAll\nServer = file://%s\n' "$KREPO" >> "$PROFILE/pacman.conf"
+      KERNEL=linux-hkos
+    else
+      echo "!!! Falha ao compilar o linux-hkos: usando o linux-zen." >&2
+    fi
+  fi
+fi
+echo "==> Kernel desta ISO: $KERNEL"
+if [[ "$KERNEL" != linux-zen ]]; then
+  sed -i -e "s/^linux-zen\$/$KERNEL/" -e "s/^linux-zen-headers\$/$KERNEL-headers/" "$PKGLIST"
+fi
+
+###############################################################################
+# 2) KERNEL: preset do initramfs, entradas de boot, nome e parâmetros
 ###############################################################################
 rm -f "$AIROOT/etc/mkinitcpio.d/linux.preset"
-put 644 etc/mkinitcpio.d/linux-zen.preset <<'EOF'
-# mkinitcpio preset do HKOS (kernel linux-zen)
+put 644 "etc/mkinitcpio.d/${KERNEL}.preset" <<EOF
+# mkinitcpio preset do HKOS (kernel ${KERNEL})
 PRESETS=('archiso')
 
-ALL_kver='/boot/vmlinuz-linux-zen'
+ALL_kver='/boot/vmlinuz-${KERNEL}'
 archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'
 
-archiso_image="/boot/initramfs-linux-zen.img"
+archiso_image="/boot/initramfs-${KERNEL}.img"
 EOF
 
 LIVE_CMD='mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1 iommu=pt workqueue.power_efficient=0 cpufreq.default_governor=performance amd_pstate=active usbhid.mousepoll=1 i915.enable_psr=0'
 for d in grub syslinux efiboot; do
   [[ -d "$PROFILE/$d" ]] || continue
   find "$PROFILE/$d" -type f -exec sed -i \
-    -e 's|vmlinuz-linux|vmlinuz-linux-zen|g' \
-    -e 's|initramfs-linux\.img|initramfs-linux-zen.img|g' \
+    -e "s|vmlinuz-linux|vmlinuz-${KERNEL}|g" \
+    -e "s|initramfs-linux\.img|initramfs-${KERNEL}.img|g" \
     -e "s|archisosearchuuid=%ARCHISO_UUID%|& ${LIVE_CMD}|g" \
     -e 's|Arch Linux|HKOS|g' {} +
 done
@@ -1326,6 +1409,11 @@ SHIPPED=(
 mkdir -p "$AIROOT/usr/share/gameos"
 printf '%s\n' "${SHIPPED[@]}" > "$AIROOT/usr/share/gameos/files.txt"
 cp "$HERE/packages.extra" "$AIROOT/usr/share/gameos/packages.txt"
+if [[ "$KERNEL" != linux-zen ]]; then
+  sed -i -e "s/^linux-zen\$/$KERNEL/" -e "s/^linux-zen-headers\$/$KERNEL-headers/" "$AIROOT/usr/share/gameos/packages.txt"
+  mkdir -p "$AIROOT/usr/share/gameos/repo"
+  [[ "${DRYRUN:-0}" == 1 ]] || cp -L "$KREPO"/* "$AIROOT/usr/share/gameos/repo/"
+fi
 
 ###############################################################################
 # 7) FERRAMENTAS HKOS: instalador, modo console, ajustes, Proton-GE, diagnóstico
@@ -2104,6 +2192,9 @@ mount "$EFI" /mnt/boot
 echo "==> Instalando pacotes (vários minutos, precisa de internet)"
 PC="$(mktemp)"; cp /etc/pacman.conf "$PC"
 sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' "$PC"
+if [[ -f /usr/share/gameos/repo/hkos.db ]]; then
+  printf '\n[hkos]\nSigLevel = Optional TrustAll\nServer = file:///usr/share/gameos/repo\n' >> "$PC"
+fi
 sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 10/' "$PC"
 mapfile -t PKGS < <(grep -vE '^\s*(#|$)' /usr/share/gameos/packages.txt | grep -vx 'archinstall')
 
@@ -2233,6 +2324,10 @@ Para o Battle.net: menu > Battle.net. Para o Proton-GE: menu > Instalar Proton-G
 
 EOF
 INSTALLER_EOF
+
+if [[ "$KERNEL" != linux-zen ]]; then
+  sed -i "s/linux-zen/$KERNEL/g" "$AIROOT/usr/local/bin/hkos-install" "$AIROOT/usr/share/hkos/ajuda.txt"
+fi
 
 [[ "${DRYRUN:-0}" == 1 ]] && { echo "dry-run ok: $PROFILE"; exit 0; }
 
