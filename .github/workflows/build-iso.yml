@@ -2,12 +2,19 @@ name: Build GameOS ISO
 
 on:
   workflow_dispatch:
+    inputs:
+      kernel_v3:
+        description: "Kernel otimizado p/ CPUs com AVX2 (Intel Haswell/2013+ ou AMD Ryzen). NÃO inicia em CPU mais antiga."
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
 env:
   # Mude este número para recompilar o kernel linux-hkos (ex.: kernel novo no Arch).
-  KERNEL_REV: "1"
+  KERNEL_REV: "2"
+  HKOS_KFLAGS: ${{ inputs.kernel_v3 && '-pipe -march=x86-64-v3' || '-pipe' }}
+  HKOS_VARIANT: ${{ inputs.kernel_v3 && 'v3' || 'generico' }}
 
 jobs:
   build:
@@ -25,7 +32,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: kcache
-          key: hkos-kernel-${{ env.KERNEL_REV }}
+          key: hkos-kernel-${{ env.KERNEL_REV }}-${{ env.HKOS_VARIANT }}
 
       - name: Gerar a ISO (container Arch Linux)
         run: |
@@ -34,6 +41,7 @@ jobs:
             -v "$PWD":/work \
             -e OUT=/work/out \
             -e KCACHE=/work/kcache \
+            -e HKOS_KFLAGS \
             archlinux:latest \
             bash -c "pacman -Syu --noconfirm archiso && bash /work/build.sh"
 
@@ -42,7 +50,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: kcache
-          key: hkos-kernel-${{ env.KERNEL_REV }}
+          key: hkos-kernel-${{ env.KERNEL_REV }}-${{ env.HKOS_VARIANT }}
 
       - name: Enviar a ISO
         uses: actions/upload-artifact@v4
