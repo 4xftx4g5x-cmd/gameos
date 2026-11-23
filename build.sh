@@ -79,7 +79,7 @@ if [[ -n "$KCACHE" ]] && compgen -G "$KCACHE/linux-hkos-headers-*.pkg.tar.zst" >
   cp "$KCACHE"/linux-hkos-*.pkg.tar.zst "$REPO/"
   exit 0
 fi
-pacman -S --needed --noconfirm base-devel git bc cpio gettext libelf pahole perl python tar xz zstd
+pacman -S --needed --noconfirm base-devel git bc cpio gettext libelf pahole perl python tar xz zstd lz4
 id builder >/dev/null 2>&1 || useradd -m builder
 B=/home/builder/k
 rm -rf "$B"; mkdir -p "$B/out"
@@ -102,17 +102,49 @@ PY
 cat >> config.x86_64 <<'CFG'
 
 # --- ajustes HKOS (jogos / baixa latência) ---
+# agendador/tempo
 CONFIG_HZ_1000=y
 CONFIG_HZ=1000
 CONFIG_PREEMPT=y
+CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
 CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=y
+# boot mais rápido: kernel comprimido em LZ4 (descompacta bem mais rápido que zstd)
+CONFIG_KERNEL_LZ4=y
+# CONFIG_KERNEL_ZSTD is not set
+# Wine/Proton e rede
 CONFIG_NTSYNC=y
 CONFIG_TCP_CONG_BBR=y
 CONFIG_DEFAULT_BBR=y
 CONFIG_DEFAULT_TCP_CONG="bbr"
+# menos trabalho no caminho de cada chamada do sistema (já rodamos com mitigations=off)
+# CONFIG_AUDIT is not set
+# CONFIG_SCHEDSTATS is not set
 # CONFIG_SLUB_DEBUG is not set
 # CONFIG_DEBUG_PREEMPT is not set
 # CONFIG_PROFILING is not set
+# CONFIG_PAGE_OWNER is not set
+# CONFIG_PAGE_POISONING is not set
+# endurecimento que custa desempenho (troca consciente: segurança por FPS)
+# CONFIG_INIT_ON_ALLOC_DEFAULT_ON is not set
+# CONFIG_INIT_ON_FREE_DEFAULT_ON is not set
+# CONFIG_FORTIFY_SOURCE is not set
+# CONFIG_HARDENED_USERCOPY is not set
+# CONFIG_RANDOMIZE_KSTACK_OFFSET_DEFAULT is not set
+# CONFIG_SLAB_FREELIST_HARDENED is not set
+# CONFIG_SLAB_FREELIST_RANDOM is not set
+# CONFIG_SHUFFLE_PAGE_ALLOCATOR is not set
+# CONFIG_RANDOM_KMALLOC_CACHES is not set
+# CONFIG_ZERO_CALL_USED_REGS is not set
+# mitigações de CPU compiladas FORA (código de entrada/saída do kernel mais curto)
+# CONFIG_MITIGATION_PAGE_TABLE_ISOLATION is not set
+# CONFIG_MITIGATION_RETPOLINE is not set
+# CONFIG_MITIGATION_RETHUNK is not set
+# CONFIG_MITIGATION_UNRET_ENTRY is not set
+# CONFIG_MITIGATION_CALL_DEPTH_TRACKING is not set
+# CONFIG_MITIGATION_IBPB_ENTRY is not set
+# CONFIG_MITIGATION_IBRS_ENTRY is not set
+# CONFIG_MITIGATION_SRSO is not set
+# CONFIG_MITIGATION_SLS is not set
 CFG
 chown -R builder "$B"
 NP="$(nproc)"
@@ -1027,7 +1059,8 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <item label="Ventoinha da placa de vídeo"><action name="Execute"><command>xterm -e hkos-fan</command></action></item>
   <item label="GPU: energia e overclock"><action name="Execute"><command>xterm -e hkos-gpu</command></action></item>
   <item label="Heroic (Epic, GOG, Amazon)"><action name="Execute"><command>hkos-heroic</command></action></item>
-  <item label="Instalar Proton-GE"><action name="Execute"><command>xterm -e hkos-proton-ge</command></action></item>
+  <item label="Instalar Proton-HKOS (otimizado)"><action name="Execute"><command>xterm -e hkos-proton-ge hkos</command></action></item>
+  <item label="Instalar Proton-GE"><action name="Execute"><command>xterm -e hkos-proton-ge ge</command></action></item>
   <item label="Loja (instalar programas e drivers)"><action name="Execute"><command>xterm -e hkos-loja</command></action></item>
   <item label="Ajuda e comandos"><action name="Execute"><command>xterm -e hkos-ajuda</command></action></item>
   <item label="Informações do sistema"><action name="Execute"><command>xterm -e hkos-info</command></action></item>
@@ -1442,20 +1475,95 @@ TOOL_EOF
 
 put 755 usr/local/bin/hkos-proton-ge <<'TOOL_EOF'
 #!/usr/bin/env bash
-# Baixa o Proton-GE mais recente para o Steam (precisa de internet).
+# hkos-proton-ge [hkos|ge|cachyos] - baixa o Proton mais recente para o Steam (precisa de internet).
+#   hkos     Proton-HKOS: base Proton-CachyOS (ou GE se faltar) + ajustes de FPS/latência do HKOS  (padrão)
+#   ge       Proton-GE puro (GloriousEggroll)
+#   cachyos  Proton-CachyOS puro (usa a versão x86-64-v3 se a CPU tiver AVX2)
 set -euo pipefail
-DEST="$HOME/.local/share/Steam/compatibilitytools.d"
+WHICH="${1:-hkos}"
+DEST="${HKOS_PROTON_DIR:-$HOME/.local/share/Steam/compatibilitytools.d}"
 mkdir -p "$DEST"
-echo "Buscando a versão mais recente do Proton-GE..."
-URL="$(curl -fsSL https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest \
-  | grep -o '"browser_download_url": *"[^"]*\.tar\.gz"' | head -1 | cut -d'"' -f4 || true)"
+GE_API="https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest"
+CX_API="https://api.github.com/repos/CachyOS/proton-cachyos/releases/latest"
+if grep -qw avx2 /proc/cpuinfo 2>/dev/null; then CX_PATS=('x86_64_v3\.tar\.xz' 'x86_64\.tar\.xz'); else CX_PATS=('x86_64\.tar\.xz'); fi
+
+find_url() { # api padrões... -> URL do download
+  local api="$1"; shift
+  local json links pat url=""
+  json="$(curl -fsSL "$api" 2>/dev/null || true)"
+  links="$(grep -o '"browser_download_url": *"[^"]*"' <<<"$json" | cut -d'"' -f4 || true)"
+  for pat in "$@"; do
+    url="$(grep -E "${pat}\$" <<<"$links" | head -1 || true)"
+    [[ -n "$url" ]] && break
+  done
+  printf '%s' "$url"
+}
+fetch() { # URL -> extrai em $1 (pasta vazia) e imprime o nome da pasta do Proton
+  local url="$1" tmp="$2"
+  echo "Baixando: $url" >&2
+  case "$url" in
+    *.tar.xz) curl -fL --progress-bar "$url" | tar -xJ -C "$tmp" ;;
+    *)        curl -fL --progress-bar "$url" | tar -xz -C "$tmp" ;;
+  esac
+  ls -1 "$tmp" | head -1
+}
+hkos_tune() { # aplica os ajustes do HKOS dentro da pasta do Proton
+  local dir="$1" conf="$HOME/.config/hkos/dxvk.conf"
+  mkdir -p "$(dirname "$conf")"
+  cat > "$conf" <<'DXVK'
+# HKOS: menos fila de quadros = menos latência de entrada
+dxgi.maxFrameLatency = 1
+d3d9.maxFrameLatency = 1
+dxgi.syncInterval = -1
+DXVK
+  cat > "$dir/user_settings.py" <<UEOF
+# Ajustes HKOS (Proton-HKOS). Apague este arquivo para voltar ao padrão do Proton.
+user_settings = {
+    "PROTON_USE_NTSYNC": "1",
+    "PROTON_ENABLE_NVAPI": "1",
+    "PROTON_FORCE_LARGE_ADDRESS_AWARE": "1",
+    "WINEDEBUG": "-all",
+    "PROTON_LOG": "0",
+    "DXVK_LOG_LEVEL": "none",
+    "VKD3D_DEBUG": "none",
+    "VKD3D_SHADER_DEBUG": "none",
+    "DXVK_CONFIG_FILE": "$conf",
+    "__GL_SHADER_DISK_CACHE_SKIP_CLEANUP": "1",
+    "__GL_SHADER_DISK_CACHE_SIZE": "10737418240",
+}
+UEOF
+  if [[ -f "$dir/compatibilitytool.vdf" ]]; then
+    sed -i -E 's/("display_name"[[:space:]]*)"[^"]*"/\1"HKOS Proton"/' "$dir/compatibilitytool.vdf"
+  fi
+}
+
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+case "$WHICH" in
+  ge)      NAME="Proton-GE"
+           URL="$(find_url "$GE_API" '\.tar\.gz')" ;;
+  cachyos) NAME="Proton-CachyOS"
+           URL="$(find_url "$CX_API" "${CX_PATS[@]}")" ;;
+  hkos)    NAME="HKOS Proton"
+           echo "Buscando a base (Proton-CachyOS)..."
+           URL="$(find_url "$CX_API" "${CX_PATS[@]}")"
+           [[ -n "$URL" ]] || { echo "CachyOS indisponível; usando o Proton-GE como base."; URL="$(find_url "$GE_API" '\.tar\.gz')"; } ;;
+  *) echo "uso: hkos-proton-ge [hkos|ge|cachyos]"; exit 1 ;;
+esac
 if [[ -z "$URL" ]]; then
-  echo "Não consegui achar o download (sem internet?)."; read -rp "Enter para fechar..." _; exit 1
+  echo "Não consegui achar o download do $NAME (sem internet ou o projeto mudou o nome dos arquivos)."
+  read -rp "Enter para fechar..." _; exit 1
 fi
-echo "Baixando: $URL"
-curl -fL --progress-bar "$URL" | tar -xz -C "$DEST"
+FOLDER="$(fetch "$URL" "$TMP")"
+[[ -n "$FOLDER" && -d "$TMP/$FOLDER" ]] || { echo "Falha ao extrair."; read -rp "Enter para fechar..." _; exit 1; }
+if [[ "$WHICH" == hkos ]]; then
+  hkos_tune "$TMP/$FOLDER"
+  FINAL="HKOS-Proton"
+else
+  FINAL="$FOLDER"
+fi
+rm -rf "$DEST/$FINAL"; mv "$TMP/$FOLDER" "$DEST/$FINAL"
 echo
-echo "Pronto. Reinicie o Steam; nas propriedades do jogo, em Compatibilidade, escolha o Proton-GE."
+echo "Pronto: $FINAL. Reinicie o Steam; nas propriedades do jogo, em Compatibilidade, escolha o $NAME."
 read -rp "Enter para fechar..." _
 TOOL_EOF
 
