@@ -1,71 +1,64 @@
-# GameOS
+# HKOS (HK Tech)
 
-Sistema Linux otimizado para jogos, baseado em Arch Linux (archiso). Este projeto monta uma ISO live/instalável com KDE Plasma, drivers de vídeo, Steam, Lutris (Battle.net), Discord e Firefox.
-
-> **Status:** projeto inicial, **ainda não testado em hardware nem em VM**. Espere ajustes na primeira build.
-
-## O que vem na ISO
-
-| Área | Itens |
-|---|---|
-| Desktop | KDE Plasma (Wayland), SDDM, NetworkManager, Bluetooth, PipeWire |
-| Drivers de vídeo | Mesa/Vulkan (AMD e Intel), NVIDIA open (`nvidia-open`, placas GTX 16xx/RTX 20xx ou mais novas) |
-| Jogos | Steam, Lutris + Wine-staging (Battle.net), GameMode, MangoHud, Gamescope |
-| Pós-instalação | Heroic (Epic/GOG) e ProtonUp-Qt (Proton-GE) via Flatpak no primeiro boot |
-| Apps | Discord, Firefox |
-
-## Otimizações
-
-- `sysctl`: `vm.max_map_count` alto, swappiness para zram, cache de disco, BBR, `fq_codel`
-- zram com zstd no lugar de swap em disco
-- Escalonador de I/O por tipo de disco (NVMe, SSD, HDD) via udev
-- Limites de arquivos abertos e prioridade de áudio
-- NVIDIA com `modeset=1` (Wayland) e watchdogs de hardware desativados
-- `power-profiles-daemon` e `fstrim.timer` ativos
-
-Os arquivos ficam em `airootfs/etc/` e podem ser editados livremente.
+Sistema Linux (base Arch) extremamente leve, todo preto, feito para jogos: FPS alto e latência baixa.
+Vem com Steam, Discord, Firefox, Heroic, drivers e ferramentas de desempenho.
 
 ## Como gerar a ISO
 
-### Opção A: GitHub Actions (não precisa de Linux)
+1. Suba para o repositório (arquivos soltos na raiz): `build.sh`, `packages.extra`, `wallpaper.png`, `boot-splash.png`, `README.md`.
+2. O arquivo `.github/workflows/build-iso.yml` fica na pasta `.github/workflows/` (criado pelo site do GitHub).
+3. Aba **Actions** > **Build GameOS ISO** > **Run workflow**.
+   - Marque `kernel_v3` só se a sua CPU tiver AVX2 (Intel 2013+ ou AMD Ryzen). Em CPU mais antiga o sistema não inicia.
+4. Quando terminar, baixe o artefato `gameos-iso` (a ISO e o `SHA256SUMS`).
+5. Grave a ISO em um pendrive (Rufus no modo DD, ou balenaEtcher).
 
-1. Crie um repositório no GitHub e envie o conteúdo desta pasta (a pasta `.github` precisa ficar na raiz).
-2. Vá em **Actions → Build GameOS ISO → Run workflow**.
-3. Ao terminar (cerca de 20 a 40 minutos), baixe a ISO em **Artifacts**.
+O primeiro build compila o kernel próprio (`linux-hkos`) e pode levar de 1h30 a 3h. Os seguintes usam o cache e levam uns 20 minutos.
+Para recompilar o kernel, troque `KERNEL_REV` no arquivo do workflow.
+Se a compilação falhar, o HKOS usa o `linux-zen` e a ISO sai do mesmo jeito.
 
-### Opção B: num Arch Linux (ou VM Arch)
+## Testes automáticos
 
-```bash
-sudo pacman -S archiso
-sudo ./build.sh        # a ISO sai em ./out
-```
+Cada build confere se a ISO tem o kernel, o instalador, o Steam, o Firefox, o Discord e as ferramentas do HKOS, e tenta dar boot no QEMU (o boot é só informativo).
 
-## Testar
+## Instalar no disco
 
-Use uma VM antes de gravar em pendrive (QEMU, VirtualBox ou VMware, com 4 GB de RAM ou mais e EFI ativado). Em VM sem aceleração 3D, o Plasma em Wayland pode falhar; nesse caso, escolha a sessão X11 ou teste direto em hardware.
+No sistema live, abra o terminal e rode `hkos-install`.
+- UEFI usa systemd-boot e BIOS usa GRUB.
+- Particionamento automático (apaga o disco) ou manual (cfdisk).
+- Criptografia LUKS opcional (use só letras e números na senha).
+- Sistema de arquivos: ext4, xfs ou f2fs. Firmware só do seu hardware ou completo.
+- Dual boot não é suportado.
 
-Para instalar no disco, abra um terminal na sessão live e rode:
+## Comandos do HKOS
 
-```bash
-sudo gameos-install
-```
+| Comando | Para que serve |
+|---|---|
+| `hkos-control` | Painel central com tudo |
+| `hkos-game` | Roda o jogo com ajustes de FPS e latência (Steam: `hkos-game %command%`) |
+| `hkos-bench` | Mede FPS médio, 1% low e 0,1% low |
+| `hkos-gpu` | Energia, clock e overclock da placa de vídeo |
+| `hkos-fan` | Ventoinha da placa de vídeo |
+| `hkos-mode` | `desktop`, `console` ou `ultra` |
+| `hkos-update` | Atualiza com foto de segurança; `hkos-update rollback` volta atrás |
+| `hkos-loja` | Programas, drivers e Flatpak |
+| `hkos-proton-ge` | Baixa o Proton-HKOS (padrão), `ge` ou `cachyos` |
+| `hkos-heroic` | Heroic Games Launcher (Epic, GOG, Amazon) |
+| `hkos-info` | Relatório do sistema |
+| `hkos-ajuda` | Ajuda e atalhos |
 
-Ele abre o `archinstall` e, ao final, instala os pacotes e os ajustes do GameOS no sistema novo. As instruções aparecem na tela.
+Atalhos: Windows+E explorador, Windows+R executar, Ctrl+Esc menu Iniciar, botão direito na área de trabalho abre o menu.
 
-## Battle.net
+## Como medir se melhorou
 
-Abra o Lutris, procure por **Battle.net** e instale pelo script oficial. Funciona na maioria dos casos via Wine, mas alguns jogos da Blizzard podem pedir ajustes.
+Rode o mesmo jogo, na mesma cena, com `hkos-bench -t 120 %command%` (Steam > Opções de inicialização) e compare com `hkos-bench compare`.
+Faça isso com o kernel `linux-zen` e com o `linux-hkos`, e com Proton-GE, CachyOS e HKOS.
 
-## Limitações conhecidas
+## Repositório de pacotes
 
-- **Anti-cheat de kernel** (Valorant, Vanguard, alguns títulos com Easy Anti-Cheat/BattlEye sem suporte a Linux) não roda no Linux. Consulte [areweanticheatyet.com](https://areweanticheatyet.com) antes de apostar num jogo.
-- Placas NVIDIA antigas (anteriores à GTX 16xx) precisam de driver legado (AUR), que não vem nesta ISO.
-- O instalador é o `archinstall` em modo texto, não um instalador gráfico.
-- Kernel padrão do Arch (`linux`). Kernels como `linux-zen` ou CachyOS exigem DKMS para o driver NVIDIA.
+O build publica o kernel no release `repo` do GitHub. O sistema instalado usa esse repositório para atualizar o kernel junto com o `pacman -Syu`.
 
-## Próximos passos sugeridos
+## Limitações
 
-1. Kernel otimizado (zen ou CachyOS) com repositório próprio.
-2. Instalador gráfico (Calamares).
-3. Nome, logo, tema e papel de parede próprios.
-4. Repositório de pacotes próprio para o `gameos-settings`.
+- Só foi testado em um PC (GTX 1660 Super). Se der problema no seu hardware, me conte.
+- O ganho do kernel próprio é pequeno (1–3%). Meça antes de confiar.
+- Pacotes do sistema não são recompilados em x86-64-v3.

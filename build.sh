@@ -216,7 +216,7 @@ sed -i \
   -e "/^file_permissions=(/a\\  [\"/$SK/.xinitrc\"]=\"0:0:755\"" \
   "$PROFILE/profiledef.sh"
 
-for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-fan hkos-ajuda hkos-loja; do
+for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-fan hkos-ajuda hkos-loja hkos-control hkos-update; do
   sed -i "/^file_permissions=(/a\\  [\"/usr/local/bin/$s\"]=\"0:0:755\"" "$PROFILE/profiledef.sh"
 done
 
@@ -1053,6 +1053,7 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <item label="Terminal"><action name="Execute"><command>xterm</command></action></item>
   <item label="Volume"><action name="Execute"><command>pavucontrol</command></action></item>
   <separator/>
+  <item label="HKOS Control (painel central)"><action name="Execute"><command>xterm -e hkos-control</command></action></item>
   <item label="Modo console (Steam em tela cheia)"><action name="Execute"><command>hkos-mode console</command></action></item>
   <item label="Modo ultraleve (só o Steam)"><action name="Execute"><command>hkos-mode ultra</command></action></item>
   <item label="Ajustes HKOS"><action name="Execute"><command>xterm -e sudo hkos-tweaks</command></action></item>
@@ -1404,6 +1405,9 @@ done
 # Arquivos que o instalador copia para o sistema instalado
 SHIPPED=(
   etc/sysctl.d/99-gameos.conf
+  etc/pacman.d/hooks/00-hkos-snapshot.hook
+  etc/pipewire/pipewire.conf.d/10-hkos-lowlatency.conf
+  etc/pipewire/pipewire-pulse.conf.d/10-hkos-lowlatency.conf
   etc/udev/rules.d/60-ioschedulers.rules
   etc/udev/rules.d/61-hkos-block.rules
   etc/X11/xorg.conf.d/40-hkos-serverflags.conf
@@ -1443,6 +1447,10 @@ mkdir -p "$AIROOT/usr/share/gameos"
 printf '%s\n' "${SHIPPED[@]}" > "$AIROOT/usr/share/gameos/files.txt"
 cp "$HERE/packages.extra" "$AIROOT/usr/share/gameos/packages.txt"
 if [[ "$KERNEL" != linux-zen ]]; then
+  # repositório pacman do HKOS no GitHub Releases (o workflow publica; o sistema instalado atualiza o kernel por ele)
+  if [[ -n "${HKOS_REPO:-}" ]]; then
+    echo "https://github.com/${HKOS_REPO}/releases/download/repo" > "$AIROOT/usr/share/gameos/repo.url"
+  fi
   sed -i -e "s/^linux-zen\$/$KERNEL/" -e "s/^linux-zen-headers\$/$KERNEL-headers/" "$AIROOT/usr/share/gameos/packages.txt"
   mkdir -p "$AIROOT/usr/share/gameos/repo"
   [[ "${DRYRUN:-0}" == 1 ]] || cp -L "$KREPO"/* "$AIROOT/usr/share/gameos/repo/"
@@ -1843,7 +1851,9 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   Terminal: menu > Terminal (ou barra de baixo)
 
 2) FERRAMENTAS DO HKOS (no menu ou digitando o nome)
-  hkos-loja ............ instalar programas e drivers (menu pronto)
+  hkos-control ......... PAINEL CENTRAL: GPU, jogos, modos, loja, atualizar, tudo num menu
+  hkos-update .......... atualiza o sistema com foto antes (hkos-update rollback volta atras)
+  hkos-loja ............ instalar programas e drivers (menu pronto, Flatpak incluso)
   hkos-ajuda ........... esta tela
   sudo hkos-tweaks ..... perfil de desempenho, agendador, mitigacoes
   hkos-fan ............. ventoinha da placa de video
@@ -2035,12 +2045,29 @@ install_list() {
   pause
 }
 
+flatpak_menu() {
+  local Q ID
+  if ! command -v flatpak >/dev/null; then
+    dialog --yesno "O Flatpak ainda não está instalado (~50 MB). Instalar agora?\nEle dá acesso à Flathub: milhares de programas prontos." 9 62 || return 0
+    clear; pm flatpak || { echo "Falhou."; pause; return 0; }
+  fi
+  "${SUDO[@]}" flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+  Q="$(dialog --stdout --inputbox "Pesquisar na Flathub (ex.: spotify, telegram):" 8 62)" || return 0
+  valid_names "$Q" || { dialog --msgbox "Texto inválido." 6 30; return 0; }
+  clear; flatpak search "$Q" | less -R
+  ID="$(dialog --stdout --inputbox "ID do app para instalar (ex.: com.spotify.Client). Vazio = cancelar:" 8 66)" || return 0
+  [[ -n "$ID" ]] || return 0
+  [[ "$ID" =~ ^[A-Za-z0-9._-]+$ ]] || { dialog --msgbox "ID inválido." 6 30; return 0; }
+  clear; "${SUDO[@]}" flatpak install -y flathub "$ID" || echo "Falhou."
+  echo "Para abrir: flatpak run $ID"; pause
+}
+
 main() {
   command -v dialog >/dev/null || { echo "dialog ausente"; exit 1; }
   local C N Q note=""
   (( LIVE )) && note="Modo live: o que você instalar some ao reiniciar."
   while true; do
-    C="$(dialog --stdout --title "HKOS Loja" --menu "$note" 18 66 8 \
+    C="$(dialog --stdout --title "HKOS Loja" --menu "$note" 19 66 9 \
       1 "Programas e drivers (lista pronta)" \
       2 "Instalar pelo nome" \
       3 "Pesquisar" \
@@ -2048,7 +2075,8 @@ main() {
       5 "Remover programa" \
       6 "Ajuda e comandos" \
       7 "Heroic Games Launcher (Epic/GOG)" \
-      8 "Sair")" || exit 0
+      8 "Flatpak (Flathub: milhares de apps)" \
+      9 "Sair")" || exit 0
     case "$C" in
       1) install_list ;;
       2) N="$(dialog --stdout --inputbox "Nome do(s) pacote(s):" 8 62)" || continue
@@ -2066,7 +2094,8 @@ main() {
          clear; "${SUDO[@]}" pacman -Rns $N; pause ;;
       6) hkos-ajuda ;;
       7) hkos-heroic install ;;
-      8) exit 0 ;;
+      8) flatpak_menu ;;
+      9) exit 0 ;;
     esac
   done
 }
@@ -2170,10 +2199,168 @@ while true; do
 done
 TOOL_EOF
 
+put 755 usr/local/bin/hkos-update <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-update - atualiza o sistema com "foto" antes e permite voltar atrás.
+#   hkos-update            foto + pacman -Syu
+#   hkos-update list       mostra as fotos
+#   hkos-update rollback [pasta]   volta os pacotes ao estado da foto (usa o cache do pacman)
+# A foto guarda a lista de pacotes e o /etc. Também é feita sozinha antes de qualquer atualização.
+SNAP=/var/lib/hkos/snapshots
+KEEP=3
+if [[ -d /run/archiso ]]; then echo "No modo live não há o que proteger. Instale o HKOS no disco."; exit 0; fi
+[[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
+
+snap() {
+  local d
+  d="$SNAP/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$d" || return 1
+  pacman -Q > "$d/pacotes.txt" 2>/dev/null
+  tar -C / -cf - etc 2>/dev/null | zstd -q -3 -o "$d/etc.tar.zst" 2>/dev/null
+  ls -1dt "$SNAP"/*/ 2>/dev/null | tail -n +$((KEEP+1)) | xargs -r rm -rf
+  echo "$d"
+}
+snap_auto() { # chamada pelo hook do pacman: não repete se já tem foto de menos de 2 min
+  local last now t
+  last="$(ls -1dt "$SNAP"/*/ 2>/dev/null | head -1)"
+  if [[ -n "$last" ]]; then
+    now="$(date +%s)"; t="$(stat -c %Y "$last" 2>/dev/null || echo 0)"
+    (( now - t < 120 )) && return 0
+  fi
+  snap >/dev/null 2>&1 || true
+}
+list() {
+  local d n
+  for d in $(ls -1dt "$SNAP"/*/ 2>/dev/null); do
+    n="$(wc -l < "${d}pacotes.txt" 2>/dev/null || echo ?)"
+    echo "$(basename "$d")   ($n pacotes)"
+  done
+  [[ -d "$SNAP" ]] || echo "Nenhuma foto ainda."
+}
+rollback() {
+  local d="${1:-}" name ver cur f
+  [[ -n "$d" ]] || d="$(ls -1dt "$SNAP"/*/ 2>/dev/null | head -1)"
+  d="${d%/}"; [[ -d "$d" ]] || d="$SNAP/$d"
+  [[ -f "$d/pacotes.txt" ]] || { echo "Nenhuma foto encontrada (hkos-update list)."; exit 1; }
+  echo "Voltando para a foto $(basename "$d")"
+  local files=() missing=()
+  while read -r name ver; do
+    cur="$(pacman -Q "$name" 2>/dev/null | awk '{print $2}')"
+    [[ -n "$cur" && "$cur" != "$ver" ]] || continue
+    f="$(ls -1 /var/cache/pacman/pkg/"$name"-"$ver"-*.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | head -1 || true)"
+    if [[ -n "$f" ]]; then files+=("$f"); else missing+=("$name-$ver"); fi
+  done < "$d/pacotes.txt"
+  if (( ${#files[@]} == 0 )); then echo "Nada para voltar (ou os pacotes antigos não estão mais no cache)."; else
+    echo "Pacotes a voltar: ${#files[@]}"
+    read -rp "Continuar? [s/N] " r; [[ "$r" =~ ^[sS]$ ]] || exit 0
+    pacman -U --noconfirm "${files[@]}"
+  fi
+  if (( ${#missing[@]} )); then echo "Sem arquivo no cache: ${missing[*]}"; fi
+  read -rp "Restaurar também o /etc daquela foto (menos usuários/senhas/fstab)? [s/N] " r
+  if [[ "$r" =~ ^[sS]$ && -f "$d/etc.tar.zst" ]]; then
+    zstd -dc "$d/etc.tar.zst" | tar -x -C / --exclude=etc/passwd --exclude=etc/shadow --exclude=etc/group --exclude=etc/gshadow --exclude=etc/fstab --exclude=etc/crypttab --exclude=etc/hostname
+    echo "/etc restaurado."
+  fi
+  mkinitcpio -P >/dev/null 2>&1 || true
+  echo "Pronto. Reinicie."
+}
+case "${1:-update}" in
+  update) d="$(snap)" && echo "Foto salva em $d"; pacman -Syu ;;
+  snap)   snap ;;
+  snap-auto) snap_auto; exit 0 ;;
+  list)   list ;;
+  rollback) rollback "${2:-}" ;;
+  *) echo "uso: hkos-update [update|list|rollback [foto]]"; exit 1 ;;
+esac
+TOOL_EOF
+
+put 755 usr/local/bin/hkos-control <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-control - painel central do HKOS (tudo num menu só).
+command -v dialog >/dev/null || { echo "dialog não encontrado."; exit 1; }
+pause() { read -rp "Enter para voltar..." _; }
+run() { clear; "$@"; }
+while true; do
+  C="$(dialog --stdout --title "HKOS Control" --menu "Escolha uma opção:" 24 72 16 \
+    1  "Informações do sistema" \
+    2  "GPU: energia, clock e overclock" \
+    3  "GPU: ventoinha" \
+    4  "Jogos: opções de FPS/latência e perfis por jogo" \
+    5  "Medir FPS (hkos-bench): resultados" \
+    6  "Modo: desktop / console / ultraleve" \
+    7  "Ajustes do sistema (desempenho, agendador)" \
+    8  "Loja: programas, Flatpak, drivers" \
+    9  "Heroic (Epic, GOG, Amazon)" \
+    10 "Proton-GE / Proton-CachyOS" \
+    11 "Atualizar o sistema (com foto de segurança)" \
+    12 "Voltar a última atualização (rollback)" \
+    13 "Ajuda e comandos" \
+    0  "Sair")" || exit 0
+  case "$C" in
+    1)  run hkos-info; pause ;;
+    2)  run hkos-gpu ;;
+    3)  run hkos-fan ;;
+    4)  clear; { hkos-game --help 2>&1 || true; } | less -R ;;
+    5)  clear; hkos-bench show; echo; echo "Para medir: Steam > Opções de inicialização:  hkos-bench -t 120 %command%"; pause ;;
+    6)  M="$(dialog --stdout --menu "Modo de uso:" 12 64 4 \
+          desktop "Desktop normal" \
+          console "Steam em tela cheia (volta ao desktop se fechar)" \
+          console-always "Steam em tela cheia sempre" \
+          ultra "Ultraleve: só o Steam, sem barra e ícones")" || continue
+        run hkos-mode "$M"; pause ;;
+    7)  run sudo hkos-tweaks ;;
+    8)  run hkos-loja ;;
+    9)  run hkos-heroic install ;;
+    10) W="$(dialog --stdout --menu "Qual Proton baixar?" 11 70 3 \
+          hkos "Proton-HKOS (base CachyOS + ajustes de FPS/latência)" \
+          ge "Proton-GE (o mais usado)" \
+          cachyos "Proton-CachyOS puro")" || continue
+        run hkos-proton-ge "$W" ;;
+    11) run hkos-update update; pause ;;
+    12) run hkos-update rollback; pause ;;
+    13) run hkos-ajuda ;;
+    0)  exit 0 ;;
+  esac
+done
+TOOL_EOF
+
+put 644 etc/pacman.d/hooks/00-hkos-snapshot.hook <<'EOF'
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = *
+
+[Action]
+Description = HKOS: foto de segurança antes de atualizar (hkos-update rollback volta atrás)
+When = PreTransaction
+Exec = /usr/local/bin/hkos-update snap-auto
+EOF
+
+# Áudio de baixa latência (PipeWire): 256 amostras a 48 kHz ≈ 5 ms
+put 644 etc/pipewire/pipewire.conf.d/10-hkos-lowlatency.conf <<'EOF'
+context.properties = {
+    default.clock.rate        = 48000
+    default.clock.quantum     = 256
+    default.clock.min-quantum = 64
+    default.clock.max-quantum = 1024
+}
+EOF
+put 644 etc/pipewire/pipewire-pulse.conf.d/10-hkos-lowlatency.conf <<'EOF'
+pulse.properties = {
+    pulse.min.req     = 256/48000
+    pulse.default.req = 256/48000
+    pulse.min.quantum = 256/48000
+}
+stream.properties = {
+    node.latency = 256/48000
+}
+EOF
+
 put 755 usr/local/bin/hkos-install <<'INSTALLER_EOF'
 #!/usr/bin/env bash
-# HKOS - instalador automático (UEFI). Apaga o disco escolhido por inteiro.
-# Dual boot e particionamento manual não são suportados por este instalador.
+# HKOS - instalador (UEFI com systemd-boot ou BIOS com GRUB).
+# Particionamento automático (apaga o disco) ou manual (cfdisk), com criptografia LUKS opcional.
+# Dual boot não é suportado.
 set -euo pipefail
 
 # ---- funções (testáveis: HKOS_INSTALL_SOURCE=1 source hkos-install) ----
@@ -2221,10 +2408,7 @@ fw_check() { # todos os pacotes existem no repositório?
 [[ "${HKOS_INSTALL_SOURCE:-0}" == 1 ]] && return 0
 [[ $EUID -eq 0 ]] || exec sudo "$0" "$@"
 command -v dialog >/dev/null || { echo "dialog não encontrado."; exit 1; }
-if [[ ! -d /sys/firmware/efi ]]; then
-  echo "Este instalador precisa de boot UEFI. Reinicie em modo UEFI ." >&2
-  exit 1
-fi
+UEFI=1; [[ -d /sys/firmware/efi ]] || UEFI=0
 if ! curl -fsS --max-time 8 https://archlinux.org >/dev/null 2>&1; then
   echo "Sem internet. Conecte (ícone de rede na barra) e rode de novo." >&2
   exit 1
@@ -2242,8 +2426,13 @@ while read -r name size model; do
 done < <(lsblk -dpno NAME,SIZE,MODEL -e7,11)
 [[ ${#items[@]} -gt 0 ]] || { echo "Nenhum disco encontrado." >&2; exit 1; }
 
-DISK="$(dialog --stdout --title "HKOS" --menu "Em qual disco instalar?\nTODO o conteúdo dele será apagado." 18 72 8 "${items[@]}")" || exit 0
-dialog --title "ATENÇÃO" --defaultno --yesno "Apagar TUDO em $DISK e instalar o HKOS?\n\nIsso não tem volta. Dual boot não é suportado por este instalador." 10 64 || exit 0
+DISK="$(dialog --stdout --title "HKOS" --menu "Em qual disco instalar?" 18 72 8 "${items[@]}")" || exit 0
+MODE="$(dialog --stdout --title "Particionamento" --menu "Como preparar o disco $DISK:" 12 78 2 \
+  auto   "Automático: apaga o disco inteiro (recomendado)" \
+  manual "Manual: eu crio as partições (cfdisk) e escolho onde instalar")" || exit 0
+if [[ "$MODE" == auto ]]; then
+  dialog --title "ATENÇÃO" --defaultno --yesno "Apagar TUDO em $DISK e instalar o HKOS?\n\nIsso não tem volta. Dual boot não é suportado por este instalador." 10 64 || exit 0
+fi
 HOSTN="$(dialog --stdout --inputbox "Nome do computador:" 8 50 hkos)" || exit 0
 USERN="$(dialog --stdout --inputbox "Nome do usuário (minúsculas, sem espaço):" 8 50 gamer)" || exit 0
 [[ "$USERN" =~ ^[a-z_][a-z0-9_-]{0,30}$ ]] || { echo "Nome de usuário inválido." >&2; exit 1; }
@@ -2255,6 +2444,13 @@ FSTYPE="$(dialog --stdout --title "Sistema de arquivos" --menu "Onde ficam o sis
   ext4 "Padrão, o mais testado (recomendado)" \
   xfs  "Rápido com arquivos grandes (jogos)" \
   f2fs "Pensado para SSD/NVMe")" || exit 0
+CRYPT=0; LUKSPASS=""
+if dialog --title "Criptografia" --defaultno --yesno "Criptografar o sistema com LUKS?\n\nProtege seus arquivos se o PC for roubado, mas pede uma senha em todo boot e deixa o disco um pouco mais lento. Use só letras e números nessa senha." 12 70; then
+  CRYPT=1
+  LUKSPASS="$(dialog --stdout --insecure --passwordbox "Senha de criptografia do disco:" 8 54)" || exit 0
+  L2="$(dialog --stdout --insecure --passwordbox "Repita a senha de criptografia:" 8 54)" || exit 0
+  [[ -n "$LUKSPASS" && "$LUKSPASS" == "$L2" ]] || { echo "Senhas de criptografia vazias ou diferentes." >&2; exit 1; }
+fi
 FWMODE="$(dialog --stdout --title "Firmware" --menu "Firmware são os arquivos que fazem a placa de vídeo, o Wi-Fi e a rede funcionarem:" 13 76 2 \
   detect "Só o do meu hardware (instalação menor)" \
   full   "Completo (mais seguro, ocupa mais espaço)")" || exit 0
@@ -2276,25 +2472,66 @@ ULTRA=0
 dialog --title "Modo ultraleve" --defaultno --yesno "Iniciar direto no Steam em tela cheia, sem ícones, barra e notificações?\n(Dá para mudar depois: hkos-mode ultra / hkos-mode desktop)" 9 66 && ULTRA=1
 clear
 
-# --- 2) Particiona: ESP 1 GiB + raiz ext4 ---
-P=""; [[ "$DISK" =~ [0-9]$ ]] && P="p"
-EFI="${DISK}${P}1"; ROOT="${DISK}${P}2"
-echo "==> Particionando $DISK"
+# --- 2) Particiona ---
+echo "==> Preparando $DISK"
 umount -R /mnt 2>/dev/null || true
-wipefs -af "$DISK" >/dev/null
-sgdisk --zap-all "$DISK" >/dev/null
-sgdisk -n1:0:+1GiB -t1:ef00 -c1:HKOS-ESP -n2:0:0 -t2:8300 -c2:HKOS-ROOT "$DISK" >/dev/null
-partprobe "$DISK"; udevadm settle; sleep 2
-mkfs.fat -F32 -n HKOS-ESP "$EFI" >/dev/null
+cryptsetup close hkosroot 2>/dev/null || true
+P=""; [[ "$DISK" =~ [0-9]$ ]] && P="p"
+BOOTPART=""; ROOTPART=""; FMTBOOT=1
+if [[ "$MODE" == auto ]]; then
+  wipefs -af "$DISK" >/dev/null
+  sgdisk --zap-all "$DISK" >/dev/null
+  if (( UEFI )); then
+    sgdisk -n1:0:+1GiB -t1:ef00 -c1:HKOS-ESP -n2:0:0 -t2:8300 -c2:HKOS-ROOT "$DISK" >/dev/null
+    BOOTPART="${DISK}${P}1"; ROOTPART="${DISK}${P}2"
+  else
+    sgdisk -n1:0:+1MiB -t1:ef02 -c1:HKOS-BIOS -n2:0:+1GiB -t2:8300 -c2:HKOS-BOOT -n3:0:0 -t3:8300 -c3:HKOS-ROOT "$DISK" >/dev/null
+    BOOTPART="${DISK}${P}2"; ROOTPART="${DISK}${P}3"
+  fi
+  partprobe "$DISK"; udevadm settle; sleep 2
+else
+  if command -v cfdisk >/dev/null; then
+    dialog --title "Manual" --msgbox "Vai abrir o cfdisk.\n\nCrie no mínimo:\n  - uma partição de BOOT (UEFI: tipo EFI System, ~1 GB; BIOS: ~1 GB, e em disco GPT uma de 1 MB tipo BIOS boot)\n  - uma partição para a RAIZ (/)\n\nUse [Write] para gravar e depois [Quit]." 15 76
+    cfdisk "$DISK" || true
+  fi
+  partprobe "$DISK"; udevadm settle; sleep 1
+  parts=()
+  while read -r n sz; do
+    parts+=("$n" "$sz $(lsblk -no FSTYPE "$n" 2>/dev/null | head -1)")
+  done < <(lsblk -lnpo NAME,SIZE,TYPE "$DISK" | awk '$3=="part"{print $1, $2}')
+  (( ${#parts[@]} >= 4 )) || { echo "Precisa de pelo menos 2 partições (boot e raiz)." >&2; exit 1; }
+  ROOTPART="$(dialog --stdout --title "Raiz" --menu "Qual partição será a RAIZ (/)?\nEla será FORMATADA." 18 72 8 "${parts[@]}")" || exit 0
+  BOOTPART="$(dialog --stdout --title "Boot" --menu "Qual partição será o BOOT?\n(UEFI: partição EFI/FAT32 | BIOS: partição /boot)" 18 72 8 "${parts[@]}")" || exit 0
+  [[ "$ROOTPART" != "$BOOTPART" ]] || { echo "Raiz e boot não podem ser a mesma partição." >&2; exit 1; }
+  FMTBOOT=0
+  dialog --title "Boot" --yesno "Formatar a partição de boot $BOOTPART?\n(Responda Não só se ela já for uma partição EFI válida e vazia o bastante.)" 9 66 && FMTBOOT=1
+  if (( ! UEFI )) && [[ "$(blkid -s PTTYPE -o value "$DISK" 2>/dev/null)" == gpt ]]; then
+    sgdisk -p "$DISK" 2>/dev/null | grep -qi 'EF02' || { echo "Disco GPT em modo BIOS precisa de uma partição de 1 MB tipo 'BIOS boot'." >&2; exit 1; }
+  fi
+  dialog --title "ATENÇÃO" --defaultno --yesno "Vou FORMATAR:\n  raiz: $ROOTPART\n  boot: $BOOTPART (formatar: $([[ $FMTBOOT == 1 ]] && echo sim || echo não))\n\nContinuar?" 11 64 || exit 0
+fi
+if (( FMTBOOT )); then
+  if (( UEFI )); then mkfs.fat -F32 -n HKOS-ESP "$BOOTPART" >/dev/null
+  else mkfs.ext4 -F -q -L HKOS-BOOT "$BOOTPART"; fi
+fi
+ROOT="$ROOTPART"
+if (( CRYPT )); then
+  echo "==> Criptografando a raiz (LUKS2)"
+  printf '%s' "$LUKSPASS" | cryptsetup luksFormat --type luks2 --batch-mode "$ROOTPART" -
+  printf '%s' "$LUKSPASS" | cryptsetup open "$ROOTPART" hkosroot -
+  ROOT=/dev/mapper/hkosroot
+fi
 FSPKG=()
 case "$FSTYPE" in
   xfs)  mkfs.xfs -f -q -L HKOS "$ROOT"; FSPKG=(xfsprogs) ;;
   f2fs) mkfs.f2fs -f -l HKOS "$ROOT" >/dev/null; FSPKG=(f2fs-tools) ;;
   *)    mkfs.ext4 -F -q -L HKOS "$ROOT" ;;
 esac
+if (( CRYPT )); then FSPKG+=(cryptsetup); fi
+if (( ! UEFI )); then FSPKG+=(grub); fi
 mount "$ROOT" /mnt
 mkdir -p /mnt/boot
-mount "$EFI" /mnt/boot
+mount "$BOOTPART" /mnt/boot
 
 # --- 3) Instala o sistema ---
 echo "==> Instalando pacotes (vários minutos, precisa de internet)"
@@ -2332,10 +2569,16 @@ done
 pacstrap -C "$PC" -K /mnt base mkinitcpio lz4 dialog earlyoom pciutils "${PKGS[@]}" "${FSPKG[@]}" "${EXTRA[@]}"
 
 echo "==> Aplicando ajustes do HKOS"
+# o pacman.conf do sistema novo precisa do multilib (Steam/lib32) e do repositório do HKOS
+sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /mnt/etc/pacman.conf
+sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 10/' /mnt/etc/pacman.conf
+if [[ -s /usr/share/gameos/repo.url ]]; then
+  printf '\n[hkos]\nSigLevel = Optional TrustAll\nServer = %s\n' "$(cat /usr/share/gameos/repo.url)" >> /mnt/etc/pacman.conf
+fi
 while read -r f; do
   [[ -n "$f" ]] && install -D -m 0644 "/$f" "/mnt/$f"
 done < /usr/share/gameos/files.txt
-for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja; do
+for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja hkos-control hkos-update; do
   install -D -m 0755 "/usr/local/bin/$s" "/mnt/usr/local/bin/$s"
 done
 install -d /mnt/usr/share/hkos
@@ -2347,11 +2590,16 @@ echo 'tmpfs /tmp tmpfs defaults,noatime,mode=1777,size=50% 0 0' >> /mnt/etc/fsta
 
 # --- 4) Configura dentro do sistema novo ---
 CMD='quiet loglevel=3 mitigations=off nowatchdog split_lock_detect=off audit=0 nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1 amdgpu.ppfeaturemask=0xffffffff pcie_aspm=off processor.max_cstate=1 intel_idle.max_cstate=1 threadirqs skew_tick=1 iommu=pt workqueue.power_efficient=0 cpufreq.default_governor=performance amd_pstate=active usbhid.mousepoll=1 i915.enable_psr=0'
-ROOT_UUID="$(blkid -s UUID -o value "$ROOT")"
+if (( CRYPT )); then
+  LUKS_UUID="$(blkid -s UUID -o value "$ROOTPART")"
+  ROOTOPT="cryptdevice=UUID=$LUKS_UUID:hkosroot root=/dev/mapper/hkosroot"
+else
+  ROOTOPT="root=UUID=$(blkid -s UUID -o value "$ROOT")"
+fi
 cat > /mnt/root/hkos-setup.sh <<'SETUP_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-HOSTN="$1"; USERN="$2"; EXTRAS="${3:-}"; ULTRA="${4:-0}"
+HOSTN="$1"; USERN="$2"; EXTRAS="${3:-}"; ULTRA="${4:-0}"; CRYPT="${5:-0}"
 ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
 hwclock --systohc || true
 sed -i -e 's/^#\(en_US.UTF-8\)/\1/' -e 's/^#\(pt_BR.UTF-8\)/\1/' /etc/locale.gen
@@ -2381,10 +2629,9 @@ AUTOLOGIN
 sed -i "s/HKOS_USER/$USERN/" /etc/systemd/system/getty@tty1.service.d/autologin.conf
 # initramfs enxuto e rápido: só o necessário, compressão lz4, sem imagem de fallback
 install -d /etc/mkinitcpio.conf.d
-cat > /etc/mkinitcpio.conf.d/hkos.conf <<'MKCONF'
-HOOKS=(base udev autodetect modconf block filesystems fsck)
-COMPRESSION="lz4"
-MKCONF
+if [[ "$CRYPT" == 1 ]]; then HOOKS_LINE='HOOKS=(base udev autodetect modconf keyboard keymap consolefont block encrypt filesystems fsck)'
+else HOOKS_LINE='HOOKS=(base udev autodetect modconf block filesystems fsck)'; fi
+{ echo "$HOOKS_LINE"; echo 'COMPRESSION="lz4"'; } > /etc/mkinitcpio.conf.d/hkos.conf
 if [[ -f /etc/mkinitcpio.d/linux-zen.preset ]]; then
   sed -i "s/^PRESETS=.*/PRESETS=('default')/" /etc/mkinitcpio.d/linux-zen.preset
 fi
@@ -2400,12 +2647,13 @@ systemctl mask man-db.timer shadow.timer archlinux-keyring-wkd-sync.timer || tru
 SETUP_EOF
 chmod 755 /mnt/root/hkos-setup.sh
 echo "$USERN:$PASS1" > /mnt/root/.hkos-pw
-arch-chroot /mnt /root/hkos-setup.sh "$HOSTN" "$USERN" "$SERV" "$ULTRA"
+arch-chroot /mnt /root/hkos-setup.sh "$HOSTN" "$USERN" "$SERV" "$ULTRA" "$CRYPT"
 arch-chroot /mnt bash -c 'chpasswd < /root/.hkos-pw'
 shred -u /mnt/root/.hkos-pw; rm -f /mnt/root/hkos-setup.sh
 
 # --- 5) Bootloader (systemd-boot) ---
-echo "==> Instalando o bootloader"
+if (( UEFI )); then
+echo "==> Instalando o bootloader (systemd-boot)"
 bootctl --esp-path=/mnt/boot install
 cat > /mnt/boot/loader/loader.conf <<'EOF'
 default hkos.conf
@@ -2419,8 +2667,18 @@ EOF
   [[ -f /mnt/boot/amd-ucode.img ]]   && echo "initrd  /amd-ucode.img"
   [[ -f /mnt/boot/intel-ucode.img ]] && echo "initrd  /intel-ucode.img"
   echo "initrd  /initramfs-linux-zen.img"
-  echo "options root=UUID=$ROOT_UUID rw $CMD"
+  echo "options $ROOTOPT rw $CMD"
 } > /mnt/boot/loader/entries/hkos.conf
+else
+echo "==> Instalando o bootloader (GRUB, modo BIOS)"
+arch-chroot /mnt grub-install --target=i386-pc "$DISK"
+sed -i -e 's|^GRUB_TIMEOUT=.*|GRUB_TIMEOUT=0|' \
+       -e "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$CMD\"|" /mnt/etc/default/grub
+if (( CRYPT )); then
+  sed -i "s|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=$LUKS_UUID:hkosroot\"|" /mnt/etc/default/grub
+fi
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+fi
 
 sync
 umount -R /mnt
@@ -2443,5 +2701,9 @@ fi
 # 8) GERA A ISO
 ###############################################################################
 mkarchiso -v -w "$WORK/work" -o "$OUT" "$PROFILE"
+if [[ "$KERNEL" != linux-zen && -d "$KREPO" ]]; then      # arquivos do repositório de pacotes (o workflow publica)
+  mkdir -p "$OUT/repo"; cp -L "$KREPO"/* "$OUT/repo/"
+fi
+( cd "$OUT" && sha256sum ./*.iso > SHA256SUMS )
 echo "ISO gerada em: $OUT"
 ls -lh "$OUT"
