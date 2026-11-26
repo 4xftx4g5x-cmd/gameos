@@ -10,6 +10,9 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write
+
 env:
   # Mude este número para recompilar o kernel linux-hkos (ex.: kernel novo no Arch).
   KERNEL_REV: "2"
@@ -42,6 +45,7 @@ jobs:
             -e OUT=/work/out \
             -e KCACHE=/work/kcache \
             -e HKOS_KFLAGS \
+            -e HKOS_REPO="${{ github.repository }}" \
             archlinux:latest \
             bash -c "pacman -Syu --noconfirm archiso && bash /work/build.sh"
 
@@ -52,10 +56,61 @@ jobs:
           path: kcache
           key: hkos-kernel-${{ env.KERNEL_REV }}-${{ env.HKOS_VARIANT }}
 
+      - name: Teste da ISO (estrutura e arquivos essenciais)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xorriso squashfs-tools qemu-system-x86
+          ISO="$(ls out/*.iso | head -1)"
+          xorriso -indev "$ISO" -find / -type f 2>/dev/null > iso-files.txt
+          grep -E 'vmlinuz-linux-(zen|hkos)' iso-files.txt
+          grep -E 'initramfs-linux-(zen|hkos)\.img' iso-files.txt
+          grep -q 'airootfs.sfs' iso-files.txt
+          mkdir -p sfs
+          xorriso -osirrox on -indev "$ISO" -extract /arch/x86_64/airootfs.sfs sfs/airootfs.sfs 2>/dev/null
+          unsquashfs -l sfs/airootfs.sfs > sfs-files.txt
+          fail=0
+          for f in usr/local/bin/hkos-install usr/local/bin/hkos-game usr/local/bin/hkos-gpu \
+                   usr/bin/steam usr/bin/firefox usr/bin/discord usr/bin/openbox \
+                   etc/sysctl.d/99-gameos.conf; do
+            grep -q "squashfs-root/$f\$" sfs-files.txt || { echo "FALTA na ISO: $f"; fail=1; }
+          done
+          grep -q 'squashfs-root/usr/lib/modules/.*/kernel/' sfs-files.txt || { echo "FALTAM os módulos do kernel"; fail=1; }
+          grep -qE 'nvidia(-open)?\.ko|nvidia\.ko' sfs-files.txt || echo "AVISO: módulo nvidia não encontrado (DKMS pode não ter compilado)"
+          exit $fail
+
+      - name: Teste de boot no QEMU (melhor esforço, não reprova o build)
+        continue-on-error: true
+        run: |
+          ISO="$(ls out/*.iso | head -1)"
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          mkdir -p bootfiles
+          xorriso -osirrox on -indev "$ISO" -extract /arch/boot/x86_64 bootfiles 2>/dev/null
+          LABEL="$(xorriso -indev "$ISO" -pvd_info 2>&1 | sed -n 's/^Volume Id *: *//p')"
+          K="$(ls bootfiles/vmlinuz-* | head -1)"; I="$(ls bootfiles/initramfs-*.img | head -1)"
+          echo "Boot de teste: $K / $I / label=$LABEL"
+          timeout 420 qemu-system-x86_64 -machine accel=kvm:tcg -m 4096 -smp 2 -display none \
+            -serial file:boot.log -no-reboot -kernel "$K" -initrd "$I" \
+            -append "archisobasedir=arch archisolabel=$LABEL console=ttyS0 loglevel=7" \
+            -cdrom "$ISO" || true
+          tail -40 boot.log || true
+          grep -Eq 'Reached target.*(Multi-User|Graphical)|login:' boot.log
+
+      - name: Publicar pacotes do HKOS (repositório pacman no GitHub)
+        if: hashFiles('out/repo/hkos.db') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view repo --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create repo --repo "${{ github.repository }}" --prerelease \
+              --title "Repositório de pacotes HKOS" --notes "Automático: pacotes do kernel linux-hkos."
+          gh release upload repo out/repo/* --repo "${{ github.repository }}" --clobber
+
       - name: Enviar a ISO
         uses: actions/upload-artifact@v4
         with:
           name: gameos-iso
-          path: out/*.iso
+          path: |
+            out/*.iso
+            out/SHA256SUMS
           if-no-files-found: error
           retention-days: 14
