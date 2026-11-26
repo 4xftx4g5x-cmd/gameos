@@ -216,7 +216,7 @@ sed -i \
   -e "/^file_permissions=(/a\\  [\"/$SK/.xinitrc\"]=\"0:0:755\"" \
   "$PROFILE/profiledef.sh"
 
-for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-fan hkos-ajuda hkos-loja hkos-control hkos-update; do
+for s in hkos-mode hkos-info hkos-tweaks hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-fan hkos-ajuda hkos-loja hkos-control hkos-update hkos-config; do
   sed -i "/^file_permissions=(/a\\  [\"/usr/local/bin/$s\"]=\"0:0:755\"" "$PROFILE/profiledef.sh"
 done
 
@@ -411,6 +411,9 @@ inode/directory=pcmanfm.desktop
 EOF
 put 644 usr/share/hkos/keybinds.xml <<'EOF'
 <!-- HKOS: atalhos parecidos com o Windows -->
+<keybind key="XF86AudioRaiseVolume"><action name="Execute"><command>wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+</command></action></keybind>
+<keybind key="XF86AudioLowerVolume"><action name="Execute"><command>wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-</command></action></keybind>
+<keybind key="XF86AudioMute"><action name="Execute"><command>wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle</command></action></keybind>
 <keybind key="W-e"><action name="Execute"><command>hkos-explorer</command></action></keybind>
 <keybind key="W-r"><action name="Execute"><command>hkos-run</command></action></keybind>
 <keybind key="C-Escape"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
@@ -1028,9 +1031,9 @@ else
 fi
 dunst &
 tint2 &
-nm-applet &
-volumeicon &
 fi
+# resolução e Hz escolhidos no hkos-config
+[ -f "$HOME/.config/hkos/display.sh" ] && sh "$HOME/.config/hkos/display.sh" &
 [ -f "$HOME/.config/hkos-fan-curve" ] && hkos-fan run &
 [ -f "$HOME/.config/hkos-gpu.conf" ] && hkos-gpu boot &
 # NVIDIA: PowerMizer em "preferir máximo desempenho" (ignorado em outras placas)
@@ -1052,7 +1055,9 @@ put 644 $SK/.config/openbox/menu.xml <<'EOF'
   <separator/>
   <item label="Terminal"><action name="Execute"><command>xterm</command></action></item>
   <item label="Volume"><action name="Execute"><command>pavucontrol</command></action></item>
+  <item label="Rede (Wi-Fi e cabo)"><action name="Execute"><command>xterm -e nmtui</command></action></item>
   <separator/>
+  <item label="Configurações (resolução, Hz...)"><action name="Execute"><command>xterm -e hkos-config</command></action></item>
   <item label="HKOS Control (painel central)"><action name="Execute"><command>xterm -e hkos-control</command></action></item>
   <item label="Modo console (Steam em tela cheia)"><action name="Execute"><command>hkos-mode console</command></action></item>
   <item label="Modo ultraleve (só o Steam)"><action name="Execute"><command>hkos-mode ultra</command></action></item>
@@ -1131,6 +1136,7 @@ launcher_item_app = /usr/share/applications/firefox.desktop
 launcher_item_app = /usr/share/applications/steam.desktop
 launcher_item_app = /usr/share/applications/discord.desktop
 launcher_item_app = /usr/share/applications/xterm.desktop
+launcher_item_app = /usr/share/applications/hkos-config.desktop
 
 taskbar_mode = single_desktop
 taskbar_padding = 2 2 4
@@ -1437,6 +1443,7 @@ SHIPPED=(
   etc/X11/xorg.conf.d/30-hkos-mouse.conf
   etc/os-release etc/motd
   usr/share/applications/hkos-explorer.desktop
+  usr/share/applications/hkos-config.desktop
   usr/share/applications/hkos-heroic.desktop
   usr/share/hkos/keybinds.xml
   etc/fonts/local.conf
@@ -1851,6 +1858,7 @@ put 644 usr/share/hkos/ajuda.txt <<'HELP_EOF'
   Terminal: menu > Terminal (ou barra de baixo)
 
 2) FERRAMENTAS DO HKOS (no menu ou digitando o nome)
+  hkos-config .......... configurações simples: resolução, Hz, modo, rede e som
   hkos-control ......... PAINEL CENTRAL: GPU, jogos, modos, loja, atualizar, tudo num menu
   hkos-update .......... atualiza o sistema com foto antes (hkos-update rollback volta atras)
   hkos-loja ............ instalar programas e drivers (menu pronto, Flatpak incluso)
@@ -2199,6 +2207,103 @@ while true; do
 done
 TOOL_EOF
 
+put 644 usr/share/applications/hkos-config.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Configurações
+Comment=Resolução, Hz, rede e som
+Exec=xterm -e hkos-config
+Icon=preferences-system
+Terminal=false
+Categories=Settings;
+EOF
+
+put 755 usr/local/bin/hkos-config <<'TOOL_EOF'
+#!/usr/bin/env bash
+# hkos-config - configurações simples (de propósito, poucas): resolução, taxa de atualização (Hz), modo, rede e som.
+# A resolução e os Hz escolhidos ficam salvos em ~/.config/hkos/display.sh e voltam em todo login.
+CONF="${HKOS_DISPLAY_CONF:-$HOME/.config/hkos/display.sh}"
+
+outputs()   { xrandr --query 2>/dev/null | awk '/ connected/{print $1}'; }
+# linhas de modo de uma saída ("   1920x1080   60.00*+  59.94")
+omodes()    { xrandr --query 2>/dev/null | awk -v o="$1" '$1==o && / connected/{f=1;next} /^[^ ]/{f=0} f'; }
+cur_mode()  { omodes "$1" | awk '/\*/{print $1; exit}'; }
+cur_rate()  { omodes "$1" | awk '/\*/{for(i=2;i<=NF;i++) if($i ~ /\*/){gsub(/[*+]/,"",$i); print $i; exit}}'; }
+modes()     { omodes "$1" | awk '{print $1}'; }
+rates()     { omodes "$1" | awk -v m="$2" '$1==m{for(i=2;i<=NF;i++){gsub(/[*+]/,"",$i); print $i}}' | sort -rn; }
+
+save_cfg() { # saída modo taxa
+  mkdir -p "$(dirname "$CONF")"; touch "$CONF"
+  { grep -vF -- "--output \"$1\" " "$CONF" || true
+    printf 'xrandr --output "%s" --mode "%s" --rate "%s"\n' "$1" "$2" "$3"; } > "$CONF.tmp"
+  mv "$CONF.tmp" "$CONF"
+}
+apply() { # saída modo taxa  (volta sozinho em 15 s se você não confirmar)
+  local o="$1" m="$2" r="$3" om or
+  om="$(cur_mode "$o")"; or="$(cur_rate "$o")"
+  if ! xrandr --output "$o" --mode "$m" --rate "$r" 2>/dev/null; then
+    dialog --msgbox "O monitor não aceitou essa combinação." 6 46; return 1
+  fi
+  if dialog --timeout 15 --yesno "Manter $m a $r Hz?\n\n(Se você não responder, volta sozinho em 15 segundos.)" 9 54; then
+    save_cfg "$o" "$m" "$r"
+  else
+    xrandr --output "$o" --mode "$om" ${or:+--rate "$or"} 2>/dev/null
+  fi
+}
+pick_output() {
+  local list=() o
+  while read -r o; do list+=("$o" "$(cur_mode "$o") a $(cur_rate "$o") Hz"); done < <(outputs)
+  (( ${#list[@]} )) || { dialog --msgbox "Nenhum monitor encontrado (xrandr)." 6 44; return 1; }
+  if (( ${#list[@]} == 2 )); then printf '%s' "${list[0]}"; return 0; fi
+  dialog --stdout --menu "Qual monitor?" 12 56 5 "${list[@]}"
+}
+set_resolution() {
+  local o m items=() cur r
+  o="$(pick_output)" || return 0
+  cur="$(cur_mode "$o")"
+  while read -r m; do items+=("$m" "$([[ $m == "$cur" ]] && echo '(atual)')"); done < <(modes "$o")
+  m="$(dialog --stdout --menu "Resolução de $o:" 20 50 12 "${items[@]}")" || return 0
+  r="$(rates "$o" "$m" | head -1)"           # usa a maior taxa de atualização dessa resolução
+  apply "$o" "$m" "$r"
+}
+set_hz() {
+  local o m items=() r cur
+  o="$(pick_output)" || return 0
+  m="$(cur_mode "$o")"; cur="$(cur_rate "$o")"
+  while read -r r; do items+=("$r" "$([[ $r == "$cur" ]] && echo '(atual)')"); done < <(rates "$o" "$m")
+  r="$(dialog --stdout --menu "Taxa de atualização (Hz) de $o em $m:" 16 54 8 "${items[@]}")" || return 0
+  apply "$o" "$m" "$r"
+}
+main() {
+  command -v dialog >/dev/null || { echo "dialog não encontrado."; exit 1; }
+  command -v xrandr >/dev/null || { echo "xrandr não encontrado."; exit 1; }
+  local C M
+  while true; do
+    C="$(dialog --stdout --title "Configurações" --menu "O básico, sem complicar:" 15 62 6 \
+      1 "Resolução" \
+      2 "Taxa de atualização (Hz)" \
+      3 "Modo: desktop / console / ultraleve" \
+      4 "Rede (Wi-Fi e cabo)" \
+      5 "Som (volume e saída)" \
+      0 "Sair")" || exit 0
+    case "$C" in
+      1) set_resolution ;;
+      2) set_hz ;;
+      3) M="$(dialog --stdout --menu "Modo de uso:" 12 66 4 \
+            desktop "Desktop normal" \
+            console "Steam em tela cheia (volta ao desktop se fechar)" \
+            console-always "Steam em tela cheia sempre" \
+            ultra "Ultraleve: só o Steam, sem barra e ícones")" || continue
+         clear; hkos-mode "$M"; read -rp "Enter para voltar..." _ ;;
+      4) clear; nmtui ;;
+      5) pavucontrol >/dev/null 2>&1 & ;;
+      0) exit 0 ;;
+    esac
+  done
+}
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"
+TOOL_EOF
+
 put 755 usr/local/bin/hkos-update <<'TOOL_EOF'
 #!/usr/bin/env bash
 # hkos-update - atualiza o sistema com "foto" antes e permite voltar atrás.
@@ -2281,7 +2386,7 @@ command -v dialog >/dev/null || { echo "dialog não encontrado."; exit 1; }
 pause() { read -rp "Enter para voltar..." _; }
 run() { clear; "$@"; }
 while true; do
-  C="$(dialog --stdout --title "HKOS Control" --menu "Escolha uma opção:" 24 72 16 \
+  C="$(dialog --stdout --title "HKOS Control" --menu "Escolha uma opção:" 25 72 17 \
     1  "Informações do sistema" \
     2  "GPU: energia, clock e overclock" \
     3  "GPU: ventoinha" \
@@ -2295,6 +2400,7 @@ while true; do
     11 "Atualizar o sistema (com foto de segurança)" \
     12 "Voltar a última atualização (rollback)" \
     13 "Ajuda e comandos" \
+    14 "Configurações simples (resolução, Hz, rede, som)" \
     0  "Sair")" || exit 0
   case "$C" in
     1)  run hkos-info; pause ;;
@@ -2319,6 +2425,7 @@ while true; do
     11) run hkos-update update; pause ;;
     12) run hkos-update rollback; pause ;;
     13) run hkos-ajuda ;;
+    14) run hkos-config ;;
     0)  exit 0 ;;
   esac
 done
@@ -2578,7 +2685,7 @@ fi
 while read -r f; do
   [[ -n "$f" ]] && install -D -m 0644 "/$f" "/mnt/$f"
 done < /usr/share/gameos/files.txt
-for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja hkos-control hkos-update; do
+for s in hkos-mode hkos-proton-ge hkos-heroic hkos-explorer hkos-run hkos-battlenet hkos-gpu hkos-gpu-root hkos-game hkos-game-root hkos-bench hkos-info hkos-tweaks hkos-fan hkos-ajuda hkos-loja hkos-control hkos-update hkos-config; do
   install -D -m 0755 "/usr/local/bin/$s" "/mnt/usr/local/bin/$s"
 done
 install -d /mnt/usr/share/hkos

@@ -34,6 +34,7 @@ No sistema live, abra o terminal e rode `hkos-install`.
 | Comando | Para que serve |
 |---|---|
 | `hkos-control` | Painel central com tudo |
+| `hkos-config` | Configurações simples: resolução, Hz, modo, rede e som |
 | `hkos-game` | Roda o jogo com ajustes de FPS e latência (Steam: `hkos-game %command%`) |
 | `hkos-bench` | Mede FPS médio, 1% low e 0,1% low |
 | `hkos-gpu` | Energia, clock e overclock da placa de vídeo |

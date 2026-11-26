@@ -22,7 +22,6 @@ exfatprogs
 zram-generator
 networkmanager
 wpa_supplicant
-network-manager-applet
 xterm
 
 # --- Áudio ---
@@ -33,12 +32,12 @@ wireplumber
 lib32-pipewire
 lib32-libpulse
 pavucontrol
-volumeicon
 
 # --- Desktop ultraleve (X11 + Openbox + barra tint2, sem gerenciador de login) ---
 xorg-server
 xorg-xinit
 xorg-xset
+xorg-xrandr
 xorg-xsetroot
 xorg-xrdb
 xf86-input-libinput
